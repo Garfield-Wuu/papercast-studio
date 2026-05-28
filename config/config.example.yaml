@@ -1,0 +1,64 @@
+# PaperCast / literature-video-agent — example config
+# 复制为 config/config.yaml 后再修改
+
+paths:
+  inbox:    ./inbox
+  archive:  ./archive
+  work:     ./work
+  review:   ./review
+  output:   ./output
+  template: ./templates/lab_template.pptx
+  template_meta: ./templates/lab_template.meta.json
+  prompts:  ./prompts
+  db:       ./logs/papercast.sqlite
+
+# ---- LLM ----
+llm:
+  reader:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    max_tokens: 8000
+  author:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    max_tokens: 8000
+
+# ---- TTS（沿用 Hermes 既有 MiniMax 客户端，PaperCast 只暴露薄适配器）----
+tts:
+  provider: minimax
+  voice: female_warm
+  fallback_voice: male_calm
+  speed: 1.0
+  concurrency: 3
+  poll:
+    initial_sec: 10
+    max_sec: 60
+    timeout_sec: 1800
+
+# ---- 视频 ----
+video:
+  resolution: 1920x1080
+  fps: 30
+  audio_bitrate: 192k
+  naming: "{date}_{paper_id}.mp4"
+
+# ---- PPT 软指引 ----
+slides:
+  target_pages: [12, 15]
+  hard_max_pages: 17
+  hard_min_pages: 10
+  speaking_rate_cpm: 220   # 中文每分钟字符数估算
+  target_duration_sec: [420, 540]   # 7-9 分钟
+
+# ---- 审核 / 通知 ----
+review:
+  notify:
+    channel: discord
+    discord_webhook_env: DISCORD_WEBHOOK_PAPERCAST
+    mention: ""   # 例如 "<@123456789012345678>"
+    include_attachments: [pptx, script, fact_cards]
+
+# ---- 调度 ----
+scheduler:
+  max_concurrent_papers: 2
+  retry_max: 3

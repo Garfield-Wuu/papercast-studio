@@ -1,0 +1,56 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- venv / uv ---
+.venv/
+venv/
+.uv/
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- secrets ---
+config/secrets.env
+.env
+.env.*
+!.env.example
+
+# --- runtime artifacts (papercast) ---
+inbox/*
+!inbox/.gitkeep
+archive/*
+!archive/.gitkeep
+work/*
+!work/.gitkeep
+review/*
+!review/.gitkeep
+output/*
+!output/.gitkeep
+logs/*
+!logs/.gitkeep
+
+# template binaries — committed as authoritative source for the parser.
+# Only ignore local backups and PowerPoint lock files.
+templates/*.backup.pptx
+templates/~$*.pptx
+
+# --- test ---
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
