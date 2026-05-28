@@ -1,8 +1,10 @@
-# literature-video-agent (PaperCast Agent)
+# papercast-studio (PaperCast Agent · Studio)
 
 把一篇 PDF 文献变成一段约 8 分钟、套用课题组 PPT 模板、带语音和字幕的讲解视频。
 全流程自动，仅在 PPT 与讲稿处接受人工审核。
 
+> **仓库定位**：`papercast-studio` 是 [`literature-video-agent`](https://github.com/Garfield-Wuu/literature-video-agent) v1 baseline 的支线开发分支（fork 自 commit `8e9af6c`），用于实验新特性。两个仓库使用**独立的 conda env**（`papercast` 给原仓库，`papercast-studio` 给本仓库），避免 editable 安装互相覆盖。
+>
 > 完整设计文档见 Obsidian：`项目/文献分享视频生成agent工作流开发手册.md`
 > 部署平台：Hermes（Cron + 文件触发 + Discord 通知）
 > 当前状态：v1 端到端跑通（手工 + LLM 混合阶段，详见 [Bootstrap 模式](#bootstrap-模式)）
@@ -92,13 +94,15 @@ soffice --version  # 输出版本号 (Windows 装在 C:\Program Files\LibreOffic
 
 ```bash
 # 1. clone
-git clone https://github.com/Garfield-Wuu/literature-video-agent.git
-cd literature-video-agent
+git clone https://github.com/Garfield-Wuu/papercast-studio.git
+cd papercast-studio
 
 # 2. Python 环境（任选）
 # --- 方案 A：conda（开发推荐）---
-conda create -n papercast python=3.11 -y
-conda activate papercast
+# 注意：studio 必须用独立 env，不要复用原 literature-video-agent 的 `papercast` env，
+# 否则两边 editable 安装会互相覆盖 .pth 文件。
+conda create -n papercast-studio python=3.11 -y
+conda activate papercast-studio
 pip install -e ".[dev,llm]"
 
 # --- 方案 B：uv（部署推荐）---
@@ -266,8 +270,8 @@ ls output/
 ### 1. 拉代码
 
 ```bash
-git clone https://github.com/Garfield-Wuu/literature-video-agent.git /opt/papercast
-cd /opt/papercast
+git clone https://github.com/Garfield-Wuu/papercast-studio.git /opt/papercast-studio
+cd /opt/papercast-studio
 ```
 
 ### 2. 装系统依赖（Linux 版见 [系统依赖](#linux-hermes-部署目标) 一节）
@@ -319,13 +323,13 @@ uv run papercast template-parse --force
 
 ```cron
 # 每天早上 9:07 兜底扫一次 inbox
-7 9 * * *    cd /opt/papercast && uv run papercast scan
+7 9 * * *    cd /opt/papercast-studio && uv run papercast scan
 
 # 每 5 分钟把可推进的任务往前推一格（TTS 异步轮询、视频合成需要持续 tick）
-*/5 * * * *  cd /opt/papercast && uv run papercast tick
+*/5 * * * *  cd /opt/papercast-studio && uv run papercast tick
 
 # 每小时给失败任务一次重试机会
-13 * * * *   cd /opt/papercast && uv run papercast retry-failed
+13 * * * *   cd /opt/papercast-studio && uv run papercast retry-failed
 ```
 
 终态（`published` / `failed`）和人工审核态（`awaiting_review`）会自动跳过，高频 `tick` 几乎零成本。
