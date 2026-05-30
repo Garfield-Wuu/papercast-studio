@@ -293,34 +293,14 @@ def test_parse_script_md_keeps_internal_horizontal_rules(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
-# Bullets adaptive font size (Fix C)
+# Bullets adaptive font size (Fix-C r1 + Fix-7 r2)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("n_bullets, expected_pt", [
-    (3, 18),     # ≤ 5 → 18pt
-    (5, 18),
-    (6, 16),     # 6-7 → 16pt
-    (7, 16),
-    (8, 14),     # 8-9 → 14pt
-    (9, 14),
-    (10, 12),    # ≥ 10 → 12pt
-    (12, 12),
-])
-def test_bullets_font_size_adapts_to_count(
-    tmp_path_factory: pytest.TempPathFactory, n_bullets: int, expected_pt: int,
-) -> None:
-    """Build a Bullets-bearing slide via assemble_pptx and check that
-    each paragraph's run carries the expected font size.
-
-    Note: python-pptx renames slide-level placeholders to generic names
-    ("Content Placeholder 1", "Text Placeholder 2") on insertion, so we
-    locate the Bullets placeholder by its idx in the layout rather than
-    by name.
-    """
-    if not TEMPLATE.exists():
-        pytest.skip("lab_template.pptx missing")
-
+def _build_bullets_pptx(
+    tmp_path: Path, layout_name: str, n_bullets: int,
+) -> Path:
+    """Assemble a 1-page deck with `n_bullets` items in the named layout."""
     plan = SlidesPlan(
         paper_id="bullets_test",
         total_pages=1,
@@ -328,7 +308,7 @@ def test_bullets_font_size_adapts_to_count(
         pages=[
             PageSpec(
                 page_no=1,
-                layout="Background_TextOnly",
+                layout=layout_name,
                 fields={
                     "Subtitle": "测试",
                     "Bullets": [f"项目 {i+1}" for i in range(n_bullets)],
@@ -336,41 +316,134 @@ def test_bullets_font_size_adapts_to_count(
             ),
         ],
     )
-    out = tmp_path_factory.mktemp("bullets") / "out.pptx"
-    figures_dir = out.parent / "figures"
+    out = tmp_path / "out.pptx"
+    figures_dir = tmp_path / "figures"
     figures_dir.mkdir()
     (figures_dir / "figures.json").write_text("[]", encoding="utf-8")
 
     from papercast.author.render import assemble_pptx
     assemble_pptx(plan, TEMPLATE, figures_dir, out)
+    return out
 
-    # Locate Bullets placeholder via the layout's name → idx mapping.
-    pres = Presentation(out)
-    layout = next(l for l in pres.slide_layouts if l.name == "Background_TextOnly")
+
+def _read_bullets_size(pptx_path: Path, layout_name: str) -> set[float]:
+    """Return the set of pt sizes seen across all bullets paragraphs."""
+    pres = Presentation(pptx_path)
+    layout = next(l for l in pres.slide_layouts if l.name == layout_name)
     bullets_idx = next(
         ph.placeholder_format.idx for ph in layout.placeholders if ph.name == "Bullets"
     )
     slide = list(pres.slides)[0]
-    bullets_ph = next(
-        ph for ph in slide.placeholders
-        if ph.placeholder_format.idx == bullets_idx
-    )
+    ph = next(p for p in slide.placeholders if p.placeholder_format.idx == bullets_idx)
 
-    paragraphs = list(bullets_ph.text_frame.paragraphs)
-    assert len(paragraphs) == n_bullets
-    for para in paragraphs:
+    sizes: set[float] = set()
+    for para in ph.text_frame.paragraphs:
+        if not (para.runs or para.text):
+            continue
         size = None
-        if para.runs:
-            for run in para.runs:
-                if run.font.size:
-                    size = run.font.size
-                    break
+        for run in para.runs:
+            if run.font.size:
+                size = run.font.size
+                break
         if size is None:
             size = para.font.size
-        assert size is not None, f"no size set on paragraph: {para.text!r}"
-        assert size.pt == expected_pt, (
-            f"n={n_bullets}: expected {expected_pt}pt, got {size.pt}pt"
+        if size is not None:
+            sizes.add(size.pt)
+    return sizes
+
+
+# Layout-aware sizing matrix (r2). Tier ceilings (heights are read via
+# python-pptx's Length.cm — see _bullets_size_ceiling docstring):
+#   Bullets H ≥ 13 cm  → 24 pt   (text-heavy: TextOnly / Discussion /
+#                                 Results / Background / Methods)
+#   9 ≤ H < 13         → 22 pt   (TOC: 11.20 cm)
+#   5 ≤ H < 9          → 20 pt   (WideImage: 6.4-7.8 cm)
+#   H < 5              → 18 pt   (JournalIntro: 3.40 cm)
+# Each tier steps DOWN by 2 pt for every extra 2 paragraphs past 5.
+
+@pytest.mark.parametrize("layout, n_bullets, expected_pt", [
+    # Tier 1 — text-heavy container (Background_TextOnly = 15.20 cm)
+    ("Background_TextOnly", 3, 24),
+    ("Background_TextOnly", 5, 24),
+    ("Background_TextOnly", 6, 22),
+    ("Background_TextOnly", 8, 20),
+    ("Background_TextOnly", 10, 18),
+
+    # Tier 2 — medium container (TOC = 11.20 cm)
+    ("TOC", 4, 22),
+    ("TOC", 6, 20),
+
+    # Tier 3 — image-and-text container (Methods_WideImage = 7.40 cm)
+    ("Methods_WideImage", 4, 20),
+    ("Methods_WideImage", 6, 18),
+    ("Methods_WideImage", 9, 16),
+
+    # Tier 4 — tight container (JournalIntro = 3.40 cm)
+    ("JournalIntro", 3, 18),
+    ("JournalIntro", 7, 16),
+])
+def test_bullets_font_size_layout_aware(
+    tmp_path_factory: pytest.TempPathFactory,
+    layout: str, n_bullets: int, expected_pt: int,
+) -> None:
+    """The font-size schedule must take the placeholder's height into
+    account, not just the bullet count, so 5 bullets in a 6 cm-tall
+    Bullets box (Background_TextOnly) read larger than 5 bullets in a
+    3 cm-tall box (Methods_WideImage)."""
+    if not TEMPLATE.exists():
+        pytest.skip("lab_template.pptx missing")
+
+    out = _build_bullets_pptx(
+        tmp_path_factory.mktemp(f"{layout}_{n_bullets}"),
+        layout_name=layout,
+        n_bullets=n_bullets,
+    )
+    sizes = _read_bullets_size(out, layout)
+    assert sizes == {float(expected_pt)}, (
+        f"layout={layout} n={n_bullets}: expected {expected_pt}pt, got {sizes}"
+    )
+
+
+def test_bullets_size_floor_at_12pt(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Even on a tight container with many bullets the floor is 12 pt.
+
+    Note: with the r2 schedule this is hard to trigger naturally —
+    JournalIntro tier is 18 pt, so n=20 gives 18−6=12 pt → exactly the
+    floor. For a tighter test we'd need more bullets, but n=20 already
+    overflows the placeholder visually so we stop there.
+    """
+    if not TEMPLATE.exists():
+        pytest.skip("lab_template.pptx missing")
+    out = _build_bullets_pptx(
+        tmp_path_factory.mktemp("floor"),
+        layout_name="JournalIntro",  # 3.40 cm tier (18 pt ceiling)
+        n_bullets=20,                # base − 6 = 12 pt
+    )
+    sizes = _read_bullets_size(out, "JournalIntro")
+    assert sizes == {12.0}
+
+
+def test_bullets_size_text_only_layouts_use_largest_tier(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Sanity check: every *_TextOnly + Discussion + Results layout in
+    the lab template falls into the 24 pt tier so they all start at
+    24 pt for ≤5 bullets."""
+    if not TEMPLATE.exists():
+        pytest.skip("lab_template.pptx missing")
+    for layout_name in (
+        "Background_TextOnly",
+        "Methods_TextOnly",
+        "Experiment_TextOnly",
+        "Discussion",
+        "Results",
+    ):
+        out = _build_bullets_pptx(
+            tmp_path_factory.mktemp(f"large_{layout_name}"),
+            layout_name=layout_name, n_bullets=4,
         )
+        sizes = _read_bullets_size(out, layout_name)
+        assert sizes == {24.0}, f"{layout_name}: expected 24pt, got {sizes}"
 
 
 def test_bullets_autosize_fallback_enabled(
@@ -417,6 +490,31 @@ def test_bullets_autosize_fallback_enabled(
     )
     assert bullets_ph.text_frame.auto_size == MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
     assert bullets_ph.text_frame.word_wrap is True
+
+
+# Pure unit test for the height → ceiling mapping (no PPTX involved).
+def test_bullets_size_ceiling_tiers() -> None:
+    from papercast.author.render import _bullets_size_ceiling
+
+    # Tier 1: ≥ 13 cm (text-heavy layouts in the lab template)
+    assert _bullets_size_ceiling(13.0) == 24
+    assert _bullets_size_ceiling(15.20) == 24      # Background_TextOnly
+    assert _bullets_size_ceiling(15.93) == 24      # Discussion / Results
+
+    # Tier 2: 9 - 13 cm (TOC)
+    assert _bullets_size_ceiling(9.0) == 22
+    assert _bullets_size_ceiling(11.20) == 22      # TOC
+    assert _bullets_size_ceiling(12.99) == 22
+
+    # Tier 3: 5 - 9 cm (image-and-text layouts)
+    assert _bullets_size_ceiling(5.0) == 20
+    assert _bullets_size_ceiling(6.40) == 20       # Background_WideImage
+    assert _bullets_size_ceiling(7.40) == 20       # Methods_WideImage
+    assert _bullets_size_ceiling(7.80) == 20       # Experiment_WideImage
+
+    # Tier 4: < 5 cm (JournalIntro)
+    assert _bullets_size_ceiling(3.40) == 18       # JournalIntro
+    assert _bullets_size_ceiling(0.0) == 18
 
 
 def test_assembled_slide_notes_match_script(

@@ -289,57 +289,78 @@ def _apply_field_styling(ph, layout_name: str, field_name: str) -> None:
 
 
 def _clamp_bullets_font_size(ph) -> None:
-    """Pick a font size for the Bullets placeholder based on paragraph
-    count, then enable PowerPoint's "shrink text on overflow" as a
-    secondary safety net for unusually long lines.
+    """Pick a font size for the Bullets placeholder, then enable
+    PowerPoint's "shrink text on overflow" as a safety net.
 
-    Sizing schedule (chosen against the lab template's 2.9-cm Bullets
-    box; tested visually with the FPC-VLA paper):
+    The size depends on TWO inputs:
 
-        n ≤ 5    → 18 pt   (master default; no change)
-        6–7      → 16 pt
-        8–9      → 14 pt
-        ≥ 10     → 12 pt
+      1. The placeholder's HEIGHT — different layouts give Bullets very
+         different vertical real estate. In the lab template the Bullets
+         box ranges from 3.4 cm (JournalIntro) up to 15.9 cm (Discussion
+         / Results), a > 4× span. Larger containers should carry larger
+         type, otherwise they look empty and the page reads as text-light
+         dead space.
 
-    We set the font size on every run (not just the first) because
-    python-pptx creates one default run per paragraph and we want the
-    schedule to apply uniformly.
+      2. The PARAGRAPH COUNT — within a given container, more bullets
+         means each gets less room. We start from the layout's "ceiling"
+         and step down for denser plans.
+
+    Sizing matrix (`base` = ceiling for the container; final size goes
+    down from that by paragraph count):
+
+        Bullets height ≥ 13 cm   →  base = 24 pt
+            (Discussion / Results / *_TextOnly / Background / Methods)
+        9 ≤ height < 13 cm       →  base = 22 pt   (TOC)
+        5 ≤ height < 9 cm        →  base = 20 pt   (*_WideImage)
+        height < 5 cm            →  base = 18 pt   (JournalIntro)
+
+        n ≤ 5   →  base
+        n ≤ 7   →  base − 2
+        n ≤ 9   →  base − 4
+        n ≥ 10  →  base − 6   (clamped at 12 pt floor)
+
+    Heights are read via python-pptx's Length.cm property (not raw EMU)
+    so the conversion is correct regardless of the document's EMU base
+    (Length internally uses 914400 EMU per inch).
     """
     tf = ph.text_frame
-    n = max(1, len(tf.paragraphs))
+    n = max(1, len([p for p in tf.paragraphs if p.text or p.runs]))
+    base = _bullets_size_ceiling(ph.height.cm)
     if n <= 5:
-        size = 18
+        size = base
     elif n <= 7:
-        size = 16
+        size = base - 2
     elif n <= 9:
-        size = 14
+        size = base - 4
     else:
-        size = 12
+        size = base - 6
+    size = max(12, size)
 
     pt_size = Pt(size)
     for para in tf.paragraphs:
-        # If the paragraph has no run (text was set via tf.text or
-        # paragraph.text), accessing .runs returns []; in that case the
-        # paragraph carries default formatting and we set it via the
-        # first run we can find — falling back to no-op silently if the
-        # paragraph genuinely has no text content.
         if para.runs:
             for run in para.runs:
                 run.font.size = pt_size
         elif para.text:
-            # python-pptx exposes a default run via para.font; setting on
-            # paragraph-level font cascades to its (implicit) runs.
             para.font.size = pt_size
 
-    # Belt-and-braces: let PowerPoint shrink further if our schedule was
-    # still too generous for the actual rendered width.
     try:
         tf.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
         tf.word_wrap = True
     except Exception:
-        # Some placeholder kinds (rare) reject auto_size; ignore — the
-        # explicit pt_size above is already in effect.
         pass
+
+
+def _bullets_size_ceiling(height_cm: float) -> int:
+    """Return the maximum font size (pt) for a Bullets placeholder of
+    the given height in centimetres. Tier boundaries: 5 / 9 / 13 cm."""
+    if height_cm >= 13.0:
+        return 24
+    if height_cm >= 9.0:
+        return 22
+    if height_cm >= 5.0:
+        return 20
+    return 18
 
 
 def _looks_like_image_field(name: str, value: Any) -> bool:
