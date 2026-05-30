@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field
@@ -26,9 +27,47 @@ class Paths(BaseModel):
 
 
 class LLMTarget(BaseModel):
-    provider: str = "anthropic"
+    """One LLM endpoint's worth of configuration.
+
+    Mirrors `papercast.llm.client.LLMSpec` 1:1 so we can convert with
+    `LLMTarget.to_spec()` without losing fields. Every field is optional
+    with a sensible default; the YAML config only has to override what
+    differs from the global defaults.
+    """
+
+    provider: str = "anthropic"            # anthropic | openai | openai_compat
     model: str = "claude-sonnet-4-6"
+    api_key: str | None = None             # explicit key (only via config.yaml — never commit)
+    api_key_env: str = "ANTHROPIC_API_KEY"
+    base_url: str | None = None            # custom endpoint (Claude proxy, OpenAI-compat host)
     max_tokens: int = 8000
+    temperature: float | None = None       # None → don't send the field
+    timeout_sec: float = 90.0
+    system_prompt: str | None = None
+    extra_headers: dict[str, str] = Field(default_factory=dict)
+    extra_params: dict[str, Any] = Field(default_factory=dict)
+
+    def to_spec(self) -> "Any":
+        """Convert to a `papercast.llm.client.LLMSpec`.
+
+        Imported lazily so `papercast.core.config` doesn't depend on the
+        llm package — this matters for environments that haven't
+        installed the `[llm]` extra.
+        """
+        from papercast.llm.client import LLMSpec
+        return LLMSpec(
+            provider=self.provider,
+            model=self.model,
+            api_key=self.api_key,
+            api_key_env=self.api_key_env,
+            base_url=self.base_url,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            timeout_sec=self.timeout_sec,
+            system_prompt=self.system_prompt,
+            extra_headers=dict(self.extra_headers),
+            extra_params=dict(self.extra_params),
+        )
 
 
 class LLM(BaseModel):

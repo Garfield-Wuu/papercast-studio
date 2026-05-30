@@ -153,67 +153,81 @@ def tick(paper_id: str | None = typer.Argument(None)) -> None:
         console.print(f"[green]advanced[/green] {pid} -> {nxt.value}")
 
 
-def _build_reader_stage(stage_fn):
-    """Wrap a reader.pipeline function that needs an LLMReader injected.
+# ---------------------------------------------------------------------------
+# LLM stage runners
+# ---------------------------------------------------------------------------
+#
+# Three pipeline stages need an LLM:
+#   read_done    → reading.json     (uses cfg.llm.reader)
+#   slides_done  → slides_plan.json (uses cfg.llm.author)
+#   script_done  → script.md        (uses cfg.llm.author)
+#
+# Each runner is "bootstrap-friendly": if the artifact already exists on
+# disk it is treated as truth and the LLM call is skipped. That lets a
+# reviewer hand-edit a file (or pre-stage one for testing) without
+# re-billing tokens, and matches the human-in-the-loop review flow.
+#
+# When the artifact is missing AND the corresponding LLM endpoint is not
+# configured, we raise `LLMNotConfiguredError` with a clear message so
+# the WebUI / CLI can prompt the user to set keys instead of silently
+# producing garbage.
 
-    The default LLMReader raises — production deployments are expected to
-    swap in their own client (Hermes will inject one). This stub keeps
-    `tick` runnable on stages that don't need an LLM.
+
+def _build_provider_for(cfg, role: str):
+    """Return a configured LLMProvider for `role` ('reader' or 'author').
+
+    Imports are local so the LLM extra remains optional for environments
+    that only run the non-LLM stages (parse / figures / TTS / compose).
     """
+    from papercast.llm.client import LLMNotConfiguredError, build_provider
 
-    class _NotConfiguredReader:
-        def complete(self, prompt: str) -> str:  # noqa: ARG002
-            raise RuntimeError(
-                "LLM reader not configured for this deployment. "
-                "Either supply an LLMReader in code or pre-stage reading.json by hand."
-            )
-
-    def _runner(cfg, paper_id):
-        stage_fn(cfg, paper_id, reader=_NotConfiguredReader())
-
-    return _runner
+    target = getattr(cfg.llm, role)
+    spec = target.to_spec()
+    if spec.resolved_api_key() is None:
+        raise LLMNotConfiguredError(
+            f"LLM provider for '{role}' is not configured. "
+            f"Set {spec.api_key_env} in env (or `llm.{role}.api_key` in config.yaml), "
+            f"or pre-stage the artifact by hand to skip this stage."
+        )
+    return build_provider(spec)
 
 
 def _read_done_runner(cfg, paper_id):
-    """read_done stage: skip the LLM call if reading.json already exists.
+    """figures_split → read_done.
 
-    During the bootstrap test, reading.json is hand-authored (Hermes will
-    later replace this with a real LLM call). Re-entering this stage for
-    the same paper should be a no-op.
+    Skips the LLM call if reading.json already exists. Otherwise calls
+    the configured Reader LLM via run_reading().
     """
     from pathlib import Path
 
     out = Path(cfg.paths.work) / paper_id / "reading.json"
     if out.exists():
         return
+
     from papercast.reader import pipeline
-    _build_reader_stage(pipeline.run_reading)(cfg, paper_id)
+    provider = _build_provider_for(cfg, "reader")
+    pipeline.run_reading(cfg, paper_id, reader=provider)
 
 
 def _slides_done_runner(cfg, paper_id):
-    """slides_done stage: assemble the .pptx from slides_plan.json.
+    """read_done → slides_done.
 
-    Per design: slides_plan.json is produced by the Author LLM (currently
-    hand-authored during bootstrap). When it exists, we run the assembler
-    to produce the .pptx. The assembler is deterministic — re-running on
-    the same plan is safe and overwrites the previous output.
+    Two concerns:
+      1. produce slides_plan.json (LLM Planner, unless the file already
+         exists on disk — reviewer / bootstrap case)
+      2. assemble work/<pid>/<pid>.pptx from that plan + figures + template
 
-    If script.md is already present (bootstrap, or re-tick after
-    script_done), each slide's speaker-notes pane is populated so the
-    reviewer can read the script alongside the slide.
-
-    If slides_plan.json is missing we treat the stage as not-yet-runnable
-    and raise loudly; the harness will surface this as a stage failure.
+    The .pptx assembly always runs because slides_plan.json may have been
+    edited between ticks, and `assemble_pptx` is idempotent.
     """
     from pathlib import Path
 
     work = Path(cfg.paths.work) / paper_id
     plan_path = work / "slides_plan.json"
+
     if not plan_path.exists():
-        raise FileNotFoundError(
-            f"slides_plan.json missing for {paper_id}. "
-            f"Pre-stage it by hand or wait for the Author LLM step to land."
-        )
+        _generate_slides_plan(cfg, paper_id, plan_path)
+
     from papercast.author.render import assemble_pptx, load_slides_plan, parse_script_md
 
     plan = load_slides_plan(plan_path)
@@ -225,25 +239,90 @@ def _slides_done_runner(cfg, paper_id):
     )
 
 
-def _script_done_runner(cfg, paper_id):
-    """script_done stage: ensure the .pptx carries the latest script.
+def _generate_slides_plan(cfg, paper_id, plan_path):
+    """LLM-generate slides_plan.json from reading.json + figures + meta."""
+    import json
+    from pathlib import Path
 
-    The Author LLM produces script.md in this stage (currently hand-
-    authored). To keep the .pptx and script in sync, we re-assemble the
-    .pptx with notes; the assembler is idempotent so this is cheap.
+    from papercast.llm.planner import AnthropicPlanner, write_slides_plan
+    from papercast.reader.figures import FigureRecord
+    from papercast.reader.reading import FactCard, FiveSectionReading
+
+    work = Path(cfg.paths.work) / paper_id
+    reading_path = work / "reading.json"
+    figures_path = work / "figures" / "figures.json"
+    meta_path = Path(cfg.paths.template_meta)
+
+    if not reading_path.exists():
+        raise FileNotFoundError(
+            f"reading.json missing for {paper_id}. read_done must run before slides_done."
+        )
+    if not figures_path.exists():
+        raise FileNotFoundError(
+            f"figures.json missing for {paper_id}. figures_split must run before slides_done."
+        )
+    if not meta_path.exists():
+        raise FileNotFoundError(
+            f"template meta missing: {meta_path}. Run `papercast template-parse` first."
+        )
+
+    reading_payload = json.loads(reading_path.read_text(encoding="utf-8"))
+    reading = FiveSectionReading(
+        literature_intro=reading_payload["literature_intro"],
+        research_question=reading_payload["research_question"],
+        methods=reading_payload["methods"],
+        findings=reading_payload["findings"],
+        discussion=reading_payload["discussion"],
+        key_terms=list(reading_payload.get("key_terms", [])),
+        fact_cards=[
+            FactCard(claim=c["claim"], evidence=c["evidence"], page=int(c["page"]))
+            for c in reading_payload.get("fact_cards", [])
+        ],
+    )
+    figures_payload = json.loads(figures_path.read_text(encoding="utf-8"))
+    figures = [
+        FigureRecord(
+            id=f["id"], type=f["type"], page=f["page"], label=f["label"],
+            filename=f["filename"], bbox=tuple(f["bbox"]), caption=f.get("caption", ""),
+        )
+        for f in figures_payload
+    ]
+    template_meta = json.loads(meta_path.read_text(encoding="utf-8"))
+
+    provider = _build_provider_for(cfg, "author")
+    planner = AnthropicPlanner(provider, prompts_dir=Path(cfg.paths.prompts))
+    plan = planner.plan(
+        reading=reading,
+        figures=figures,
+        template_meta=template_meta,
+        paper_id=paper_id,
+        target_pages=tuple(cfg.slides.target_pages),
+        target_duration_sec=int(sum(cfg.slides.target_duration_sec) / 2),
+        report_date_placeholder="{{REPORT_DATE}}",
+    )
+    write_slides_plan(plan, plan_path)
+
+
+def _script_done_runner(cfg, paper_id):
+    """slides_done → script_done.
+
+    If script.md already exists, skip LLM generation but still re-assemble
+    the .pptx so the speaker-notes pane stays in sync. Otherwise call the
+    LLM Scripter, write script.md, then re-assemble.
     """
     from pathlib import Path
 
     work = Path(cfg.paths.work) / paper_id
     script_path = work / "script.md"
-    if not script_path.exists():
-        raise FileNotFoundError(
-            f"script.md missing for {paper_id}. "
-            f"Pre-stage it by hand or wait for the Author LLM step to land."
-        )
     plan_path = work / "slides_plan.json"
+
     if not plan_path.exists():
-        return  # nothing to re-assemble against; non-fatal at this stage
+        raise FileNotFoundError(
+            f"slides_plan.json missing for {paper_id}. slides_done must run first."
+        )
+
+    if not script_path.exists():
+        _generate_script(cfg, paper_id, plan_path, script_path)
 
     from papercast.author.render import assemble_pptx, load_slides_plan, parse_script_md
 
@@ -254,6 +333,48 @@ def _script_done_runner(cfg, paper_id):
         plan, Path(cfg.paths.template), work / "figures", out,
         page_notes=page_notes or None,
     )
+
+
+def _generate_script(cfg, paper_id, plan_path, script_path):
+    """LLM-generate script.md from slides_plan.json + reading.json."""
+    import json
+    from pathlib import Path
+
+    from papercast.author.render import load_slides_plan
+    from papercast.llm.scripter import AnthropicScripter, write_script_markdown
+    from papercast.reader.reading import FactCard, FiveSectionReading
+
+    work = Path(cfg.paths.work) / paper_id
+    reading_path = work / "reading.json"
+    if not reading_path.exists():
+        raise FileNotFoundError(
+            f"reading.json missing for {paper_id}. read_done must run before script_done."
+        )
+
+    plan = load_slides_plan(plan_path)
+    reading_payload = json.loads(reading_path.read_text(encoding="utf-8"))
+    reading = FiveSectionReading(
+        literature_intro=reading_payload["literature_intro"],
+        research_question=reading_payload["research_question"],
+        methods=reading_payload["methods"],
+        findings=reading_payload["findings"],
+        discussion=reading_payload["discussion"],
+        key_terms=list(reading_payload.get("key_terms", [])),
+        fact_cards=[
+            FactCard(claim=c["claim"], evidence=c["evidence"], page=int(c["page"]))
+            for c in reading_payload.get("fact_cards", [])
+        ],
+    )
+
+    provider = _build_provider_for(cfg, "author")
+    scripter = AnthropicScripter(provider, prompts_dir=Path(cfg.paths.prompts))
+    script = scripter.write(
+        plan=plan,
+        reading=reading,
+        speaking_rate_cpm=cfg.slides.speaking_rate_cpm,
+        target_duration_sec=tuple(cfg.slides.target_duration_sec),
+    )
+    write_script_markdown(script, script_path)
 
 
 def _awaiting_review_runner(cfg, paper_id):

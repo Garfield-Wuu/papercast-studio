@@ -30,9 +30,16 @@ dependencies = [
 llm = [
   "anthropic>=0.40",
 ]
+server = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "python-multipart>=0.0.9",
+  "websockets>=12",
+]
 dev = [
   "pytest>=8.2",
   "pytest-cov>=5.0",
+  "pytest-asyncio>=0.23",
   "ruff>=0.5",
   "mypy>=1.10",
 ]

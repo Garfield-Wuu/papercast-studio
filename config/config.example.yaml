@@ -13,15 +13,55 @@ paths:
   db:       ./logs/papercast.sqlite
 
 # ---- LLM ----
+# 支持多供应商：anthropic / openai / openai_compat
+# (openai_compat 适用于 DeepSeek / Moonshot / 智谱 GLM / Qwen DashScope / Ollama / vLLM 等)
+#
+# 同时支持以下三种密钥配置方式（优先级从高到低）：
+#   1. api_key:        直接写在 yaml 里（仅当 yaml 不入库时使用，如 secrets-only 文件）
+#   2. api_key_env:    环境变量名，运行时从 env 读取
+#   3. 不设置:         启动时报 LLMNotConfigured，提示用户在 WebUI 设置或 export
+#
+# WebUI 的「设置 → 模型」会写到这里。
 llm:
   reader:
-    provider: anthropic
+    provider: anthropic                   # anthropic | openai | openai_compat
     model: claude-sonnet-4-6
+    api_key_env: ANTHROPIC_API_KEY        # 默认 env 变量名
+    # base_url: https://api.anthropic.com   # 可选 — Claude 中转 / 自托管 proxy
     max_tokens: 8000
+    # temperature: 0.5                    # 可选；不设则不下发该字段
+    timeout_sec: 90.0
+    # extra_headers: {}                   # 可选 — 中转服务可能要求特定 header
+    # extra_params: {}                    # 透传到 messages.create 的额外参数
+
   author:
     provider: anthropic
     model: claude-sonnet-4-6
+    api_key_env: ANTHROPIC_API_KEY
     max_tokens: 8000
+    timeout_sec: 90.0
+
+# OpenAI / OpenAI 兼容端点示例（需要时整段替换上面 reader 或 author）：
+#
+#   provider: openai
+#   model: gpt-5
+#   api_key_env: OPENAI_API_KEY
+#   base_url: https://api.openai.com/v1
+#
+#   provider: openai_compat
+#   model: deepseek-chat
+#   api_key_env: DEEPSEEK_API_KEY
+#   base_url: https://api.deepseek.com/v1
+#
+#   provider: openai_compat
+#   model: glm-4.6
+#   api_key_env: ZHIPU_API_KEY
+#   base_url: https://open.bigmodel.cn/api/paas/v4
+#
+#   provider: openai_compat
+#   model: qwen3:32b
+#   api_key_env: OLLAMA_API_KEY            # 任意非空值；本地 Ollama 不校验
+#   base_url: http://localhost:11434/v1
 
 # ---- TTS（沿用 Hermes 既有 MiniMax 客户端，PaperCast 只暴露薄适配器）----
 tts:
