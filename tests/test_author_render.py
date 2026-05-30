@@ -292,6 +292,133 @@ def test_parse_script_md_keeps_internal_horizontal_rules(tmp_path: Path) -> None
     assert notes[2] == "结尾。"
 
 
+# ---------------------------------------------------------------------------
+# Bullets adaptive font size (Fix C)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("n_bullets, expected_pt", [
+    (3, 18),     # ≤ 5 → 18pt
+    (5, 18),
+    (6, 16),     # 6-7 → 16pt
+    (7, 16),
+    (8, 14),     # 8-9 → 14pt
+    (9, 14),
+    (10, 12),    # ≥ 10 → 12pt
+    (12, 12),
+])
+def test_bullets_font_size_adapts_to_count(
+    tmp_path_factory: pytest.TempPathFactory, n_bullets: int, expected_pt: int,
+) -> None:
+    """Build a Bullets-bearing slide via assemble_pptx and check that
+    each paragraph's run carries the expected font size.
+
+    Note: python-pptx renames slide-level placeholders to generic names
+    ("Content Placeholder 1", "Text Placeholder 2") on insertion, so we
+    locate the Bullets placeholder by its idx in the layout rather than
+    by name.
+    """
+    if not TEMPLATE.exists():
+        pytest.skip("lab_template.pptx missing")
+
+    plan = SlidesPlan(
+        paper_id="bullets_test",
+        total_pages=1,
+        target_duration_sec=480,
+        pages=[
+            PageSpec(
+                page_no=1,
+                layout="Background_TextOnly",
+                fields={
+                    "Subtitle": "测试",
+                    "Bullets": [f"项目 {i+1}" for i in range(n_bullets)],
+                },
+            ),
+        ],
+    )
+    out = tmp_path_factory.mktemp("bullets") / "out.pptx"
+    figures_dir = out.parent / "figures"
+    figures_dir.mkdir()
+    (figures_dir / "figures.json").write_text("[]", encoding="utf-8")
+
+    from papercast.author.render import assemble_pptx
+    assemble_pptx(plan, TEMPLATE, figures_dir, out)
+
+    # Locate Bullets placeholder via the layout's name → idx mapping.
+    pres = Presentation(out)
+    layout = next(l for l in pres.slide_layouts if l.name == "Background_TextOnly")
+    bullets_idx = next(
+        ph.placeholder_format.idx for ph in layout.placeholders if ph.name == "Bullets"
+    )
+    slide = list(pres.slides)[0]
+    bullets_ph = next(
+        ph for ph in slide.placeholders
+        if ph.placeholder_format.idx == bullets_idx
+    )
+
+    paragraphs = list(bullets_ph.text_frame.paragraphs)
+    assert len(paragraphs) == n_bullets
+    for para in paragraphs:
+        size = None
+        if para.runs:
+            for run in para.runs:
+                if run.font.size:
+                    size = run.font.size
+                    break
+        if size is None:
+            size = para.font.size
+        assert size is not None, f"no size set on paragraph: {para.text!r}"
+        assert size.pt == expected_pt, (
+            f"n={n_bullets}: expected {expected_pt}pt, got {size.pt}pt"
+        )
+
+
+def test_bullets_autosize_fallback_enabled(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Even with an explicit font size, the Bullets text frame must have
+    auto_size enabled as a safety net for unusually long single-bullet
+    text."""
+    if not TEMPLATE.exists():
+        pytest.skip("lab_template.pptx missing")
+    from pptx.enum.text import MSO_AUTO_SIZE
+
+    plan = SlidesPlan(
+        paper_id="autosize_test",
+        total_pages=1,
+        target_duration_sec=480,
+        pages=[
+            PageSpec(
+                page_no=1,
+                layout="Background_TextOnly",
+                fields={
+                    "Subtitle": "测试",
+                    "Bullets": ["一条很长很长很长很长很长很长很长很长很长的描述" * 3],
+                },
+            ),
+        ],
+    )
+    out = tmp_path_factory.mktemp("autosize") / "out.pptx"
+    figures_dir = out.parent / "figures"
+    figures_dir.mkdir()
+    (figures_dir / "figures.json").write_text("[]", encoding="utf-8")
+
+    from papercast.author.render import assemble_pptx
+    assemble_pptx(plan, TEMPLATE, figures_dir, out)
+
+    pres = Presentation(out)
+    layout = next(l for l in pres.slide_layouts if l.name == "Background_TextOnly")
+    bullets_idx = next(
+        ph.placeholder_format.idx for ph in layout.placeholders if ph.name == "Bullets"
+    )
+    bullets_ph = next(
+        ph for ph in list(pres.slides)[0].placeholders
+        if ph.placeholder_format.idx == bullets_idx
+    )
+    assert bullets_ph.text_frame.auto_size == MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+    assert bullets_ph.text_frame.word_wrap is True
+
+
 def test_assembled_slide_notes_match_script(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
