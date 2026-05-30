@@ -11,6 +11,8 @@ from papercast.author.render import PageSpec, SlidesPlan, parse_script_md
 from papercast.llm.client import LLMProvider
 from papercast.llm.scripter import (
     AnthropicScripter,
+    _CLOSING_LINE,
+    _force_closing_line,
     _normalize_script_markdown,
     build_scripter_prompt,
     write_script_markdown,
@@ -205,3 +207,131 @@ def test_write_script_markdown_creates_parent(tmp_path: Path) -> None:
     nested = tmp_path / "a" / "b" / "c" / "script.md"
     write_script_markdown("## Page 1\nhello\n", nested)
     assert nested.read_text(encoding="utf-8") == "## Page 1\nhello\n"
+
+
+# ---------------------------------------------------------------------------
+# Closing-line enforcement (Fix R3)
+# ---------------------------------------------------------------------------
+
+
+def _plan_with_end_layout() -> SlidesPlan:
+    """A 3-page plan whose last page uses the End layout."""
+    return SlidesPlan(
+        paper_id="end_test",
+        total_pages=3,
+        target_duration_sec=480,
+        pages=[
+            PageSpec(page_no=1, layout="Cover", fields={}),
+            PageSpec(page_no=2, layout="Methods", fields={}),
+            PageSpec(page_no=3, layout="End", fields={}),
+        ],
+    )
+
+
+def test_force_closing_line_overwrites_llm_default_thanks() -> None:
+    """The LLM's default closing ('感谢各位聆听，欢迎提问与讨论') must be
+    replaced with the canonical project line."""
+    md = (
+        "## Page 1\nopening.\n\n"
+        "## Page 2\nbody.\n\n"
+        "## Page 3\n以上是本次文献汇报的全部内容，感谢各位聆听，欢迎提问与讨论。\n"
+    )
+    out = _force_closing_line(md, _plan_with_end_layout())
+    # Old text gone
+    assert "欢迎提问" not in out
+    assert "感谢各位聆听" not in out
+    # New canonical line present
+    assert _CLOSING_LINE in out
+    # Page 1 / Page 2 untouched
+    assert "opening." in out
+    assert "body." in out
+
+
+def test_force_closing_line_preserves_metadata_fence() -> None:
+    """A trailing `---` metadata fence must NOT be eaten by the closing
+    rewrite — the fence is parsed by parse_script_md as metadata."""
+    md = (
+        "## Page 1\nopening.\n\n"
+        "## Page 2\nbody.\n\n"
+        "## Page 3\n感谢聆听，欢迎讨论。\n\n"
+        "---\n"
+        "total_chars: 100\n"
+        "estimated_seconds: 30\n"
+    )
+    out = _force_closing_line(md, _plan_with_end_layout())
+    assert _CLOSING_LINE in out
+    assert "total_chars: 100" in out
+    assert "estimated_seconds: 30" in out
+    # The fence sits AFTER the canonical line.
+    fence_idx = out.find("---\ntotal_chars")
+    closing_idx = out.find(_CLOSING_LINE)
+    assert closing_idx < fence_idx
+    # And the LLM's text is gone.
+    assert "欢迎讨论" not in out
+
+
+def test_force_closing_line_no_op_when_last_layout_is_not_end() -> None:
+    """If the lab template doesn't use a layout named 'End', the helper
+    must leave the script untouched."""
+    plan = SlidesPlan(
+        paper_id="x", total_pages=2, target_duration_sec=480,
+        pages=[
+            PageSpec(page_no=1, layout="Cover", fields={}),
+            PageSpec(page_no=2, layout="Conclusions", fields={}),  # not 'End'
+        ],
+    )
+    md = (
+        "## Page 1\nopening.\n\n"
+        "## Page 2\n感谢各位聆听，欢迎提问与讨论。\n"
+    )
+    assert _force_closing_line(md, plan) == md
+
+
+def test_force_closing_line_handles_empty_plan() -> None:
+    plan = SlidesPlan(
+        paper_id="empty", total_pages=0, target_duration_sec=480, pages=[],
+    )
+    md = "## Page 1\nhello.\n"
+    assert _force_closing_line(md, plan) == md
+
+
+def test_scripter_write_applies_closing_line(tmp_path: Path) -> None:
+    """End-to-end: AnthropicScripter.write must overwrite the LLM's
+    closing whenever the plan ends in an 'End' layout, even if the LLM
+    insisted on '欢迎提问与讨论'."""
+    (tmp_path / "script.md").write_text("# scripter role guide", encoding="utf-8")
+
+    llm_response = (
+        "## Page 1\n开篇说明本文研究问题。\n\n"
+        "## Page 2\n方法概述。\n\n"
+        "## Page 3\n以上是本次文献汇报的全部内容，感谢各位聆听，欢迎提问与讨论。\n"
+        "\n---\n"
+        "total_chars: 50\n"
+        "estimated_seconds: 14\n"
+        "in_target_range: false\n"
+    )
+    stub: LLMProvider = _StubProvider(llm_response)
+    scr = AnthropicScripter(stub, prompts_dir=tmp_path)
+    out = scr.write(
+        plan=_plan_with_end_layout(),
+        reading=_stub_reading(),
+        speaking_rate_cpm=220,
+        target_duration_sec=(420, 540),
+    )
+
+    # LLM's default closing replaced
+    assert "欢迎提问" not in out
+    assert "感谢各位聆听" not in out
+    # Canonical line present in page 3 body
+    notes = parse_script_md_from_string(out)
+    assert notes[3] == _CLOSING_LINE
+
+
+def parse_script_md_from_string(text: str) -> dict[int, str]:
+    """Helper: run parse_script_md without writing to disk."""
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "x.md"
+        p.write_text(text, encoding="utf-8")
+        return parse_script_md(p)

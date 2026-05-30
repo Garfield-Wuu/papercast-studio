@@ -80,7 +80,11 @@ class AnthropicScripter:
         # Post-process for TTS: rewrite Arabic digits / percentages / units
         # the LLM may have left in the script. Idempotent.
         from .tts_normalize import normalize_for_tts
-        return normalize_for_tts(normalized)
+        normalized = normalize_for_tts(normalized)
+        # Force the closing-page script to a deterministic line so we
+        # never read out "欢迎提问与讨论" / "thanks for listening" etc.
+        normalized = _force_closing_line(normalized, plan)
+        return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -203,3 +207,73 @@ def write_script_markdown(text: str, out_path: Path) -> None:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(text, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Closing-line enforcement
+# ---------------------------------------------------------------------------
+
+
+# The lab template's last page uses the "End" layout (a thank-you /
+# closing slide). Per project convention the spoken closing must be a
+# deterministic single sentence — no "欢迎提问与讨论" or other invitations
+# that the LLM tends to produce by default.
+_CLOSING_LAYOUT_NAMES = ("End",)
+_CLOSING_LINE = "本次汇报到此结束，谢谢大家！"
+
+
+def _force_closing_line(markdown: str, plan: SlidesPlan) -> str:
+    """Rewrite the LAST page's body to a fixed closing line when its
+    layout is the dedicated closing slide (e.g. 'End').
+
+    Why force it: the LLM's natural inclination is to wrap with "感谢
+    各位聆听，欢迎提问与讨论" or similar host-style invitations. The
+    project convention is the deck closes on a self-contained sentence
+    with no Q&A solicitation. This is more reliable as code than as a
+    prompt rule because the LLM will revert ~20% of the time.
+
+    No-op when:
+      - The plan has no pages, or
+      - The last page's layout isn't in `_CLOSING_LAYOUT_NAMES`, or
+      - The script doesn't contain a `## Page N` header for that page
+        (defensive; should not happen if the script came from this
+        scripter).
+    """
+    if not plan.pages:
+        return markdown
+
+    last_page = plan.pages[-1]
+    if last_page.layout not in _CLOSING_LAYOUT_NAMES:
+        return markdown
+
+    headers = list(_PAGE_HEADER_RE.finditer(markdown))
+    if not headers:
+        return markdown
+    target = next(
+        (m for m in headers if int(m.group(1)) == last_page.page_no), None,
+    )
+    if target is None:
+        return markdown
+
+    # Body extends from the end of the matched header up to either the
+    # next page header, or the optional `---` metadata fence at the end
+    # of the document, or end-of-string.
+    body_start = target.end()
+    next_header_idx = next(
+        (m.start() for m in headers if m.start() > target.start()), None,
+    )
+    if next_header_idx is not None:
+        body_end = next_header_idx
+    else:
+        # Last page: respect a trailing metadata fence if present so we
+        # don't consume / rewrite it.
+        fence = re.search(r"^-{3,}\s*$", markdown[body_start:], re.MULTILINE)
+        body_end = body_start + fence.start() if fence else len(markdown)
+
+    return (
+        markdown[:body_start]
+        + "\n\n"
+        + _CLOSING_LINE
+        + "\n\n"
+        + markdown[body_end:]
+    )
