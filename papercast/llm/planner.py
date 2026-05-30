@@ -168,6 +168,8 @@ def build_planner_prompt(
 - 每个 page 的 `layout` 必须出现在上面 schema 列表里
 - `fields` 的 key 必须出现在该 layout 的 placeholder 列表里
 - 引用图表时使用 `figures.json` 里的 `id`，写到 `image_id`/`figure_id` 字段
+- JSON 字符串值内**禁止**出现未转义的 ASCII 双引号 (")。中文引用请使用「」或《》；
+  如必须使用 ASCII 双引号则必须转义为 \"。不允许尾随逗号。输出必须通过 `json.loads` 解析。
 """
 
 
@@ -302,10 +304,27 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
 
 
 def _safe_json_loads(text: str) -> dict[str, Any]:
+    """Parse JSON with a json_repair fallback for LLM responses.
+
+    See `papercast.reader.reading._safe_json_loads` for the same
+    rationale — LLMs sometimes break JSON with unescaped quotes / loose
+    commas / single quotes; we attempt strict parse first so deterministic
+    responses round-trip exactly, then repair on failure.
+    """
     try:
         obj = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"invalid JSON: {e}") from e
+    except json.JSONDecodeError as strict_err:
+        try:
+            from json_repair import repair_json
+        except ImportError:
+            raise ValueError(f"invalid JSON: {strict_err}") from strict_err
+        repaired = repair_json(text)
+        try:
+            obj = json.loads(repaired)
+        except json.JSONDecodeError as repair_err:
+            raise ValueError(
+                f"invalid JSON, repair also failed: strict={strict_err}; repair={repair_err}"
+            ) from strict_err
     if not isinstance(obj, dict):
         raise ValueError(f"expected JSON object, got {type(obj).__name__}")
     return obj

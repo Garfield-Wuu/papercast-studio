@@ -25,6 +25,7 @@ Thumbs.db
 
 # --- secrets ---
 config/secrets.env
+config/config.yaml
 .env
 .env.*
 !.env.example

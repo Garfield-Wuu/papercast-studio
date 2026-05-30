@@ -119,6 +119,23 @@ def test_parse_response_handles_bare_json() -> None:
     assert reading.research_question == "r"
 
 
+def test_parse_response_repairs_unescaped_inner_quotes() -> None:
+    """LLMs sometimes emit ASCII double quotes inside Chinese values,
+    breaking the JSON. json_repair should rescue these so the pipeline
+    doesn't fail on a recoverable defect.
+    """
+    raw = (
+        '{"literature_intro":"启用监督器后"将橙色积木叠放到绿色积木"任务",'
+        '"research_question":"r","methods":"m","findings":"f",'
+        '"discussion":"d","key_terms":[],"fact_cards":[]}'
+    )
+    reading = parse_reading_response(raw)
+    # Repair may keep or strip the inner quote — the contract is just
+    # that we get a valid FiveSectionReading.
+    assert reading.research_question == "r"
+    assert "积木" in reading.literature_intro
+
+
 def test_read_paper_invokes_reader_with_built_prompt() -> None:
     parsed = _stub_parsed()
     figures = _stub_figures()

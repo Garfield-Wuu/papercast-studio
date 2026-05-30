@@ -161,6 +161,10 @@ Hard rules:
 - Output Chinese for the prose sections (literature_intro / research_question /
   methods / findings / discussion). `key_terms` may be in either language.
   `fact_cards.claim` should be in Chinese; `evidence` keeps the source label.
+- JSON CORRECTNESS: inside any string value, you MUST NOT use ASCII
+  double quotes ("). If you need to quote Chinese text, use full-width
+  quotes 「」 or 《》, or escape them as \". Trailing commas are not
+  allowed. The output must round-trip through `json.loads()`.
 
 FIGURES & TABLES (id, page, caption snippet):
 {figures_block}
@@ -224,10 +228,28 @@ def _extract_json_object(raw: str) -> dict:
 
 
 def _safe_json_loads(text: str) -> dict:
+    """Parse JSON with a tolerant fallback for LLM responses.
+
+    LLMs occasionally produce JSON with subtle defects: unescaped ASCII
+    double quotes inside string values (e.g. `"启用监督器后"任务"`),
+    trailing commas, single quotes, etc. We try strict json.loads first
+    so well-formed responses stay deterministic; only on failure do we
+    fall back to `json_repair`, which is purpose-built for LLM output.
+    """
     try:
         obj = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"invalid JSON: {e}") from e
+    except json.JSONDecodeError as strict_err:
+        try:
+            from json_repair import repair_json
+        except ImportError:
+            raise ValueError(f"invalid JSON: {strict_err}") from strict_err
+        repaired = repair_json(text)
+        try:
+            obj = json.loads(repaired)
+        except json.JSONDecodeError as repair_err:
+            raise ValueError(
+                f"invalid JSON, repair also failed: strict={strict_err}; repair={repair_err}"
+            ) from strict_err
     if not isinstance(obj, dict):
         raise ValueError(f"expected JSON object, got {type(obj).__name__}")
     return obj

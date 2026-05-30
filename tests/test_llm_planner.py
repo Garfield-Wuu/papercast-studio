@@ -249,6 +249,18 @@ def test_parse_falls_back_to_caller_target_duration_sec() -> None:
     assert plan.target_duration_sec == 540
 
 
+def test_parse_repairs_unescaped_inner_quotes() -> None:
+    """When the LLM emits ASCII double quotes inside a Chinese value,
+    json_repair should rescue the parse so the pipeline keeps going."""
+    raw = (
+        '{"pages":[{"page_no":1,"layout":"Cover","fields":'
+        '{"Title":"启用监督器后"将橙色积木叠放到绿色积木"任务"}}]}'
+    )
+    plan = parse_planner_response(raw, paper_id="x", target_duration_sec=480)
+    assert plan.total_pages == 1
+    assert plan.pages[0].layout == "Cover"
+
+
 # ---------------------------------------------------------------------------
 # write_slides_plan round-trip
 # ---------------------------------------------------------------------------
