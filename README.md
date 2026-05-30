@@ -237,9 +237,52 @@ ls output/
 
 ---
 
+## Web UI（HTTP / WebSocket 服务）
+
+P2 阶段提供了 FastAPI 后端，把整条流水线包成 HTTP/WebSocket。前端（P4 起）会
+基于这个后端构建；目前先用 curl / httpie / Swagger UI 直接驱动。
+
+### 启动
+
+```bash
+# dev 模式（自动重载，info 日志）
+python -m papercast.server --reload --log-level info
+
+# 生产模式
+python -m papercast.server --port 8765 --log-level warning
+```
+
+默认绑定 `127.0.0.1:8765`，从 `config/secrets.env` 加载 API key 到环境，
+读 `config/config.yaml`。
+
+启动后：
+- Swagger UI：<http://127.0.0.1:8765/docs>
+- 健康检查：<http://127.0.0.1:8765/api/health>
+- 详细 API 参考：[`docs/SERVER_API.md`](docs/SERVER_API.md)
+
+### 一行式：上传 + 推进 + 审阅
+
+```bash
+PID=$(curl -s -F "file=@./paper.pdf" http://127.0.0.1:8765/api/papers | jq -r .paper_id)
+curl -X POST http://127.0.0.1:8765/api/papers/$PID/start
+# ... 等到 needs_review 事件 ...
+curl -X POST http://127.0.0.1:8765/api/papers/$PID/review/approve \
+     -H "Content-Type: application/json" \
+     -d '{"report_date": "2026年5月17日", "reviewer": "Wu", "voice": "xhsgarfield1"}'
+```
+
+CLI（`papercast scan / tick / approve`）和 server **共用同一套 stage runner**，
+使用任意一个都不会让另一个失效。
+
+---
+
+
 ## Bootstrap 模式
 
-**当前 v1 状态**：12 阶段全部跑通，但 3 个阶段的产物**仍是手工产生**——Hermes 接 LLM 后自动化：
+**v1 历史状态**：手工产生 reading.json / slides_plan.json / script.md 跑通。
+P1 之后由 LLM 自动产生（默认行为），但这个 fallback 仍然保留——只要文件提前存在，
+runner 就直接复用，不调 LLM、不计费。这条「文件即真相」的规则也是 webui 在线编辑
+能与 LLM 自动生成无缝并存的基础。
 
 | 阶段 | 产物 | 当前 v1 | 接 LLM 后 |
 |---|---|---|---|

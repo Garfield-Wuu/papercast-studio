@@ -290,17 +290,20 @@ papercast-studio/
 
 ## 8. 阶段化交付路线（推荐执行顺序）
 
-| 阶段 | 工作内容 | 验收标准 | 估时 |
-|---|---|---|---|
-| **P0** 文档骨架 | 本计划文档 + memory 沉淀（设计风格、API 契约） | 你确认本计划无歧义 | 0.5d |
-| **P1** LLM 接入 | `papercast/llm/{client,planner,scripter}.py` + 单测；`tick` 自动跑通 reading/slides/script 三个阶段 | 给一个 PDF，CLI 全自动跑到 awaiting_review，产物正确 | 1.5d |
-| **P2** FastAPI 后端 | server 包 + REST + WebSocket + jobs；用 curl/httpie 能完整驱动一篇论文 | 后端不依赖前端，所有接口 OpenAPI 可用 | 2d |
-| **P3** 审阅交互 | review.py 局部重生 + 在线编辑保存；前端无关的接口测试 | 给一篇已 awaiting_review 的论文，三种重生粒度都能调通 | 1d |
-| **P4** 前端骨架 | webui 工程 + 设计 token + 路由 + WS hook；任务详情页能展示进度 | 上传 PDF 后能看到 12 阶段流转动画 | 1.5d |
-| **P5** 审阅面板 | Tab 化审阅 UI（figures/reading/slides/script/facts）+ Monaco + 勾选 + 反馈对话 | 完整 e2e：上传 → 审阅 → 局部重生 → 通过 → 出视频 | 2d |
-| **P6** 文件管理 + 设置 | 文件树 / 拖拽上传 / API key 配置 / 音色克隆 | 用户只通过 webui 就能完成全部操作，零 CLI | 1d |
-| **P7** 可移植打包 | bootstrap/ 脚本 + 嵌入式 Python + ffmpeg portable + 7z release | 在干净的 Windows VM 上解压双击启动可跑 | 1.5d |
-| **P8** 体验打磨 | 视觉细节 / a11y / 错误兜底 / 引导文案；e2e 测试 | UI 通过 ui-ux-pro-max checklist；Lighthouse > 90 | 1d |
+| 阶段 | 工作内容 | 验收标准 | 估时 | 状态 |
+|---|---|---|---|---|
+| **P0** 文档骨架 | 本计划文档 + memory 沉淀（设计风格、API 契约） | 你确认本计划无歧义 | 0.5d | ✅ 完成 |
+| **P1** LLM 接入 | `papercast/llm/{client,planner,scripter}.py` + 单测；`tick` 自动跑通 reading/slides/script 三个阶段 | 给一个 PDF，CLI 全自动跑到 awaiting_review，产物正确 | 1.5d | ✅ 完成（FPC-VLA e2e 跑通：13 页 PPT + 7 分 18 秒视频） |
+| **P2** FastAPI 后端 | server 包 + REST + WebSocket + jobs + 局部重生；用 curl/httpie 能完整驱动一篇论文 | 后端不依赖前端，所有接口 OpenAPI 可用 | 2d | ✅ 完成（详见 docs/PLAN_P2_SERVER.md + docs/SERVER_API.md；276 测试通过） |
+| **P3** ~~审阅交互~~ | ~~已并入 P2.5（review.py 局部重生 + approve）~~ | — | — | ✅ 合并到 P2 |
+| **P4** 前端骨架 | webui 工程 + 设计 token + 路由 + WS hook；任务详情页能展示进度 | 上传 PDF 后能看到 12 阶段流转动画 | 1.5d | 🟡 待开始 |
+| **P5** 审阅面板 | Tab 化审阅 UI（figures/reading/slides/script/facts）+ Monaco + 勾选 + 反馈对话 | 完整 e2e：上传 → 审阅 → 局部重生 → 通过 → 出视频 | 2d | 🟡 待开始 |
+| **P6** 文件管理 + 设置 | 文件树 / 拖拽上传 / API key 配置 / 音色克隆 | 用户只通过 webui 就能完成全部操作，零 CLI | 1d | 🟡 待开始 |
+| **P7** 可移植打包 | bootstrap/ 脚本 + 嵌入式 Python + ffmpeg portable + 7z release | 在干净的 Windows VM 上解压双击启动可跑 | 1.5d | 🟡 待开始 |
+| **P8** 体验打磨 | 视觉细节 / a11y / 错误兜底 / 引导文案；e2e 测试 | UI 通过 ui-ux-pro-max checklist；Lighthouse > 90 | 1d | 🟡 待开始 |
+
+P3 在实施时与 P2 高度耦合（review_service + regenerate route 必须和后端同生），所以
+P2.5 直接吸收了 P3 的范围；剩下 P4-P8 按原顺序推进。
 
 合计 ~12 个工作日（按一天 6 小时算），核心阶段 P1–P5 跑通后已经可用，P6–P8 是产品化打磨。
 

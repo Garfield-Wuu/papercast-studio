@@ -1,0 +1,279 @@
+"""GET / POST / DELETE /api/papers (+ /papers/{pid}, /start, /stop, /retry).
+
+`POST /papers` is the primary entry path: the WebUI uploads a PDF, and
+the server registers it (matches what `papercast scan` does on the CLI).
+The other endpoints surface the existing state machine — start kicks
+off the JobOrchestrator (P2.4), stop cancels its task, retry undoes a
+failed state.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from pydantic import BaseModel
+
+from papercast.core.config import Config
+from papercast.core.db import Database
+from papercast.core.paths import paper_id_for, work_dir
+from papercast.core.scanner import scan as scan_inbox
+from papercast.core.state import Stage
+
+from ..deps import get_cfg, get_db
+from ..files import iter_papers, list_artifacts
+from ..schemas import PaperDetail, PaperHistoryEntry, PaperSummary
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/papers", tags=["papers"])
+
+
+# ---------------------------------------------------------------------------
+# List / detail
+# ---------------------------------------------------------------------------
+
+
+@router.get("", response_model=list[PaperSummary])
+def list_papers(
+    cfg: Config = Depends(get_cfg), db: Database = Depends(get_db),
+) -> list[PaperSummary]:
+    rows = db.list_papers()
+    out: list[PaperSummary] = []
+    for r in rows:
+        rec = db.get_paper(r["paper_id"])
+        out.append(PaperSummary(
+            paper_id=r["paper_id"],
+            filename=r["filename"],
+            stage=Stage(r["current_stage"]),
+            ingested_at=r["ingested_at"],
+            published_at=r.get("published_at"),
+            title=_title_for(cfg, r["paper_id"]),
+            errors=rec.errors if rec else [],
+        ))
+    return out
+
+
+@router.get("/{paper_id}", response_model=PaperDetail)
+def get_paper(
+    paper_id: str,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
+) -> PaperDetail:
+    rows = {p["paper_id"]: p for p in db.list_papers()}
+    if paper_id not in rows:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    rec = db.get_paper(paper_id)
+    summary = rows[paper_id]
+    output_path = _output_path_for(cfg, paper_id)
+    return PaperDetail(
+        paper_id=paper_id,
+        filename=summary["filename"],
+        stage=Stage(summary["current_stage"]),
+        ingested_at=summary["ingested_at"],
+        published_at=summary.get("published_at"),
+        title=_title_for(cfg, paper_id),
+        errors=rec.errors if rec else [],
+        history=[
+            PaperHistoryEntry(stage=h.stage, ts=h.ts) for h in (rec.history if rec else [])
+        ],
+        artifacts=list_artifacts(cfg, paper_id),
+        output_path=str(output_path) if output_path else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Create / delete
+# ---------------------------------------------------------------------------
+
+
+class CreateResponse(BaseModel):
+    paper_id: str
+    filename: str
+    stage: Stage
+    already_exists: bool = False
+
+
+@router.post("", response_model=CreateResponse, status_code=201)
+async def upload_paper(
+    file: UploadFile,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
+) -> CreateResponse:
+    """Accept a PDF upload, register it, return the new paper_id.
+
+    Mirrors `papercast scan` for one file: stream to inbox, hash, copy
+    into work/<pid>/source.pdf, insert DB row, move original to archive.
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "only .pdf uploads accepted")
+
+    inbox = Path(cfg.paths.inbox)
+    inbox.mkdir(parents=True, exist_ok=True)
+    target_in_inbox = inbox / file.filename
+
+    # Stream the upload to disk so big PDFs don't sit in RAM.
+    with target_in_inbox.open("wb") as f:
+        while True:
+            chunk = await file.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+
+    pid = paper_id_for(target_in_inbox)
+    if db.get_paper(pid) is not None:
+        # Duplicate — leave the file in inbox so the user notices.
+        return CreateResponse(
+            paper_id=pid,
+            filename=file.filename,
+            stage=db.get_paper(pid).stage,
+            already_exists=True,
+        )
+
+    # Copy into work/, register in db, move original to archive (mirrors scan()).
+    wd = work_dir(cfg, pid)
+    shutil.copy2(target_in_inbox, wd / "source.pdf")
+    rec = db.insert_paper(paper_id=pid, filename=file.filename)
+    archive = Path(cfg.paths.archive)
+    archive.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(target_in_inbox), str(archive / f"{pid}__{file.filename}"))
+
+    return CreateResponse(paper_id=pid, filename=file.filename, stage=rec.stage)
+
+
+@router.post("/scan", response_model=list[CreateResponse])
+def scan_inbox_route(
+    cfg: Config = Depends(get_cfg), db: Database = Depends(get_db),
+) -> list[CreateResponse]:
+    """Trigger a full inbox scan (covers PDFs already on disk before the
+    server started). Equivalent to `papercast scan`."""
+    new_ids = scan_inbox(cfg, db)
+    out: list[CreateResponse] = []
+    for pid in new_ids:
+        rec = db.get_paper(pid)
+        rows = {p["paper_id"]: p for p in db.list_papers()}
+        out.append(CreateResponse(
+            paper_id=pid,
+            filename=rows[pid]["filename"],
+            stage=rec.stage,
+        ))
+    return out
+
+
+@router.delete("/{paper_id}")
+def delete_paper(
+    paper_id: str,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """Hard delete: drop work/<pid>/, review/<pid>/, and the DB row.
+
+    output/<filename>.mp4 is intentionally NOT removed — that's the
+    final deliverable and the user may still want it."""
+    if db.get_paper(paper_id) is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    work = Path(cfg.paths.work) / paper_id
+    review = Path(cfg.paths.review) / paper_id
+    if work.exists():
+        shutil.rmtree(work, ignore_errors=True)
+    if review.exists():
+        shutil.rmtree(review, ignore_errors=True)
+    # Direct SQL — no helper for delete in core.db, so do it inline.
+    with db._connect() as conn:  # noqa: SLF001 — intentional, scoped helper
+        conn.execute("DELETE FROM stage_runs WHERE paper_id = ?", (paper_id,))
+        conn.execute("DELETE FROM papers WHERE paper_id = ?", (paper_id,))
+    return {"deleted": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# State machine controls — start / stop / retry
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{paper_id}/start")
+async def start_paper(
+    paper_id: str, request: Request, db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """Kick off the JobOrchestrator for this paper."""
+    if db.get_paper(paper_id) is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    orchestrator = request.app.state.orchestrator
+    if orchestrator is None:
+        raise HTTPException(503, "JobOrchestrator not yet wired (P2.4)")
+    await orchestrator.start(paper_id)
+    return {"started": paper_id}
+
+
+@router.post("/{paper_id}/stop")
+async def stop_paper(
+    paper_id: str, request: Request, db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    if db.get_paper(paper_id) is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    orchestrator = request.app.state.orchestrator
+    if orchestrator is None:
+        raise HTTPException(503, "JobOrchestrator not yet wired (P2.4)")
+    await orchestrator.stop(paper_id)
+    return {"stopped": paper_id}
+
+
+@router.post("/{paper_id}/retry")
+def retry_paper(
+    paper_id: str, db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """If the paper is in `failed`, walk back to its previous successful
+    stage. Mirrors `papercast retry-failed` for one paper."""
+    rec = db.get_paper(paper_id)
+    if rec is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    if rec.stage is not Stage.FAILED:
+        return {"retry": paper_id, "from_stage": rec.stage.value, "noop": True}
+    prev = None
+    for h in reversed(rec.history):
+        if h.stage is not Stage.FAILED:
+            prev = h.stage
+            break
+    if prev is None:
+        prev = Stage.INGESTED
+    rec.stage = prev
+    rec.errors = []
+    db.update_paper(rec)
+    return {"retry": paper_id, "to_stage": prev.value}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _title_for(cfg: Config, paper_id: str) -> str | None:
+    """Pluck a short title from reading.json if available."""
+    p = Path(cfg.paths.work) / paper_id / "reading.json"
+    if not p.exists():
+        return None
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    intro = (payload.get("literature_intro") or "").strip()
+    if not intro:
+        return None
+    return intro[:80] + ("…" if len(intro) > 80 else "")
+
+
+def _output_path_for(cfg: Config, paper_id: str) -> Path | None:
+    """Locate the published mp4 in cfg.paths.output (filename pattern
+    matches `{date}_{paper_id}.mp4` per cfg.video.naming, but glob is
+    forgiving in case the user changed it)."""
+    output = Path(cfg.paths.output)
+    if not output.exists():
+        return None
+    matches = sorted(output.glob(f"*_{paper_id}.mp4"))
+    if not matches:
+        return None
+    return matches[-1]
