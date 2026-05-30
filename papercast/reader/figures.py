@@ -160,8 +160,16 @@ def extract_first_page(
     pdf_path: Path,
     out_path: Path,
     dpi: int = 200,
+    crop_top_ratio: float = 0.5,
 ) -> FigureRecord:
     """Render page 1 of the PDF as a single PNG and return a FigureRecord.
+
+    `crop_top_ratio` (default 0.5) keeps only the top fraction of the page
+    so the JournalIntro slide gets a 2:1-ish horizontal crop instead of a
+    full-page portrait that gets squished into the slide. The top area of
+    a research paper carries the title / authors / abstract / first
+    paragraph — exactly the parts a viewer needs to recognize "this is
+    the paper". Set to 1.0 to preserve the original full-page render.
 
     Used by the JournalIntro slide as a "this is the paper" visual instead
     of one of the in-text figures. Caller is expected to append the record
@@ -171,13 +179,32 @@ def extract_first_page(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    if not 0.05 <= crop_top_ratio <= 1.0:
+        raise ValueError(
+            f"crop_top_ratio must be in [0.05, 1.0]; got {crop_top_ratio!r}"
+        )
+
     with fitz.open(pdf_path) as doc:
         page = doc[0]
         zoom = dpi / 72.0
-        matrix = fitz.Matrix(zoom, zoom)
-        pix = page.get_pixmap(matrix=matrix, alpha=False)
-        pix.save(str(out_path))
         rect = page.rect
+        if crop_top_ratio < 1.0:
+            # Crop in PDF coordinates BEFORE rendering — this keeps the
+            # output PNG sharp at the requested DPI (no resampling).
+            clip = fitz.Rect(
+                rect.x0,
+                rect.y0,
+                rect.x1,
+                rect.y0 + (rect.y1 - rect.y0) * crop_top_ratio,
+            )
+            matrix = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=matrix, alpha=False, clip=clip)
+            stored_rect = clip
+        else:
+            matrix = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=matrix, alpha=False)
+            stored_rect = rect
+        pix.save(str(out_path))
 
     return FigureRecord(
         id="paper_first_page",
@@ -185,8 +212,8 @@ def extract_first_page(
         page=1,
         label="Paper First Page",
         filename=out_path.name,
-        bbox=(rect.x0, rect.y0, rect.x1, rect.y1),
-        caption="论文首页截图",
+        bbox=(stored_rect.x0, stored_rect.y0, stored_rect.x1, stored_rect.y1),
+        caption="论文首页（上半部分）" if crop_top_ratio < 1.0 else "论文首页截图",
     )
 
 

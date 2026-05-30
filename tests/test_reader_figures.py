@@ -258,3 +258,74 @@ def test_caption_finder_rejects_long_first_line() -> None:
     page = _page([_block(long_first)])
     caps = _find_captions(page)
     assert not caps
+
+
+# ---------------------------------------------------------------------------
+# extract_first_page — crop ratio
+# ---------------------------------------------------------------------------
+
+
+def _make_synthetic_pdf(out: Path, w: int = 595, h: int = 842) -> Path:
+    """Create a 1-page PDF for first-page-crop tests. fitz writes a real
+    PDF (not just a stream) so the function under test sees a normal
+    document."""
+    import fitz
+    doc = fitz.open()
+    page = doc.new_page(width=w, height=h)
+    page.insert_text((50, 80), "TOP HEADER", fontsize=24)
+    page.insert_text((50, h / 2 + 40), "BOTTOM HALF", fontsize=18)
+    doc.save(str(out))
+    doc.close()
+    return out
+
+
+def test_extract_first_page_default_crops_top_half(tmp_path: Path) -> None:
+    """The default crop_top_ratio=0.5 should produce a PNG roughly half
+    the height of the source page (in pixels)."""
+    from PIL import Image
+
+    from papercast.reader.figures import extract_first_page
+
+    pdf = _make_synthetic_pdf(tmp_path / "in.pdf", w=595, h=842)
+    out = tmp_path / "first.png"
+
+    rec = extract_first_page(pdf, out, dpi=150)
+
+    assert out.exists()
+    with Image.open(out) as img:
+        # At 150 DPI, full page is ~1240x1754. Half should be ~1240x877.
+        assert 1100 < img.size[0] < 1400, f"unexpected width {img.size}"
+        assert 800 < img.size[1] < 950, f"unexpected height {img.size} (should be ~half)"
+        # Cropped image must be wider than tall (good for slide layout).
+        assert img.size[0] > img.size[1]
+    assert rec.id == "paper_first_page"
+    # bbox should reflect the crop, not the full page.
+    assert rec.bbox[3] - rec.bbox[1] < 842 * 0.55
+
+
+def test_extract_first_page_full_render_when_ratio_is_one(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from papercast.reader.figures import extract_first_page
+
+    pdf = _make_synthetic_pdf(tmp_path / "in.pdf", w=595, h=842)
+    out = tmp_path / "first.png"
+
+    extract_first_page(pdf, out, dpi=150, crop_top_ratio=1.0)
+
+    with Image.open(out) as img:
+        # Full-page at 150 DPI should be portrait (taller than wide).
+        assert img.size[1] > img.size[0]
+        assert img.size[1] > 1500
+
+
+def test_extract_first_page_rejects_invalid_ratio(tmp_path: Path) -> None:
+    from papercast.reader.figures import extract_first_page
+
+    pdf = _make_synthetic_pdf(tmp_path / "in.pdf")
+    out = tmp_path / "first.png"
+
+    with pytest.raises(ValueError):
+        extract_first_page(pdf, out, crop_top_ratio=0.0)
+    with pytest.raises(ValueError):
+        extract_first_page(pdf, out, crop_top_ratio=1.5)
