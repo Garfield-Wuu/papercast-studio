@@ -244,6 +244,54 @@ def test_parse_script_md_missing_file_returns_empty(tmp_path: Path) -> None:
     assert notes == {}
 
 
+def test_parse_script_md_strips_trailing_metadata_fence(tmp_path: Path) -> None:
+    """Regression: the LLM Scripter appends a `---\\ntotal_chars: ...`
+    fence at the end of script.md. Without filtering, this metadata
+    bleeds into the LAST page's speaker notes (and gets read aloud by
+    TTS). The parser must drop everything from the last `---` line on
+    the last page."""
+    content = (
+        "## Page 1\n"
+        "封面页讲稿。\n"
+        "\n"
+        "## Page 2\n"
+        "结束页讲稿。\n"
+        "\n"
+        "---\n"
+        "total_chars: 12\n"
+        "estimated_seconds: 4\n"
+        "in_target_range: false\n"
+    )
+    p = tmp_path / "script.md"
+    p.write_text(content, encoding="utf-8")
+    notes = parse_script_md(p)
+    assert notes == {
+        1: "封面页讲稿。",
+        2: "结束页讲稿。",
+    }
+
+
+def test_parse_script_md_keeps_internal_horizontal_rules(tmp_path: Path) -> None:
+    """A `---` that appears INSIDE a page's body (not at the trailing
+    metadata fence) should be preserved — it might be a real horizontal
+    rule the speaker wants in their notes."""
+    content = (
+        "## Page 1\n"
+        "第一段。\n"
+        "---\n"
+        "第二段。\n"
+        "\n"
+        "## Page 2\n"
+        "结尾。\n"
+    )
+    p = tmp_path / "script.md"
+    p.write_text(content, encoding="utf-8")
+    notes = parse_script_md(p)
+    # Page 1 keeps its internal `---`; page 2 has no fence so nothing stripped.
+    assert "---" in notes[1]
+    assert notes[2] == "结尾。"
+
+
 def test_assembled_slide_notes_match_script(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:

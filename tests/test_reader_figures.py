@@ -155,3 +155,106 @@ def test_roman_numeral_table_label(figures: tuple[Path, list[FigureRecord]]) -> 
         # First component must be an integer (possibly suffixed _2 if dup).
         head = suffix.split("_", 1)[0]
         assert head.isdigit()
+
+
+# ---------------------------------------------------------------------------
+# Caption-finder unit tests (no PDF fixture needed)
+# ---------------------------------------------------------------------------
+
+
+def _block(text: str, bbox: tuple[float, float, float, float] = (0, 0, 100, 20)):
+    from papercast.reader.pdf import TextBlock
+    return TextBlock(text=text, bbox=bbox)
+
+
+def _page(blocks: list, w: float = 612, h: float = 792):
+    from papercast.reader.pdf import ParsedPage
+    text = "\n\n".join(b.text for b in blocks)
+    return ParsedPage(page_no=1, text=text, blocks=blocks,
+                      image_count=0, width=w, height=h)
+
+
+def test_caption_finder_accepts_real_table_caption() -> None:
+    """`Table 5\\nComparison results on LIBERO with Franka.` is a real
+    Elsevier-style caption — must be detected."""
+    from papercast.reader.figures import _find_captions
+
+    page = _page([
+        _block("Some preceding paragraph about results."),
+        _block("Table 5\nComparison results on LIBERO with Franka."),
+        _block("Another paragraph about something else."),
+    ])
+    caps = _find_captions(page)
+    assert any(c.kind == "table" and c.label_number == 5 for c in caps)
+
+
+def test_caption_finder_accepts_table_with_colon() -> None:
+    from papercast.reader.figures import _find_captions
+
+    page = _page([
+        _block("Table 3: Comparison of methods on benchmark."),
+    ])
+    caps = _find_captions(page)
+    assert len(caps) == 1
+    assert caps[0].kind == "table"
+    assert caps[0].label_number == 3
+
+
+def test_caption_finder_accepts_bare_label_then_description_on_next_line() -> None:
+    """IEEE TABLE I followed by description on next line is the
+    most-stripped form."""
+    from papercast.reader.figures import _find_captions
+
+    page = _page([
+        _block("TABLE I\nDataset characteristics."),
+    ])
+    caps = _find_captions(page)
+    assert len(caps) == 1
+    assert caps[0].kind == "table"
+    assert caps[0].label_number == 1
+
+
+def test_caption_finder_rejects_body_text_table_n_presents() -> None:
+    """Regression: in the FPC-VLA smoke, `Table 7 presents the ablation
+    study on FPC-VLA, focusing on the Supervisor and...` was wrongly
+    accepted as a caption, causing tab_7.png to crop body text instead
+    of the actual table."""
+    from papercast.reader.figures import _find_captions
+
+    page = _page([
+        _block(
+            "Table 7 presents the ablation study on FPC-VLA, focusing on "
+            "the Supervisor and the dual-stream action fusion module. "
+            "Removing the Supervisor greatly degrades performance."
+        ),
+    ])
+    caps = _find_captions(page)
+    assert not any(c.kind == "table" for c in caps), \
+        f"verb-led 'Table N' line should NOT be a caption; got {caps!r}"
+
+
+def test_caption_finder_rejects_other_body_verbs() -> None:
+    from papercast.reader.figures import _find_captions
+
+    for verb in ("shows", "lists", "displays", "summarizes", "compares"):
+        page = _page([
+            _block(f"Table 4 {verb} the comparison results across baselines."),
+        ])
+        caps = _find_captions(page)
+        assert not caps, f"'Table N {verb} ...' wrongly classified: {caps}"
+
+
+def test_caption_finder_rejects_long_first_line() -> None:
+    """Even without a blacklisted verb, a first line over 80 chars is
+    almost certainly body text."""
+    from papercast.reader.figures import _find_captions
+
+    long_first = (
+        "Table 8 of the appendix gives the per-task breakdown of every "
+        "model variant we tried, including the corner cases that did not "
+        "make it into the main text."
+    )
+    assert len(long_first) > 80
+    page = _page([_block(long_first)])
+    caps = _find_captions(page)
+    assert not caps

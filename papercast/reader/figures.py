@@ -45,13 +45,32 @@ _FIG_CAPTION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Table captions: "TABLE I", "Table 2" — no trailing punctuation in IEEE
-# format, so we accept the bare label. Body-text mentions are filtered out
-# by the block-length guard in `_find_captions`.
+# Table captions. We accept three IEEE/Elsevier patterns:
+#     "TABLE I"          → label only (caption text follows on next line)
+#     "Table 5: foo"     → label + colon + description
+#     "Table 5. foo"     → label + period + description
+# The trailing class is intentionally restrictive — body-text mentions
+# like "Table 7 presents the ablation study..." (verb-led) MUST NOT
+# match, otherwise we crop a slab of body text and pass it off as a
+# table.
 _TAB_CAPTION_RE = re.compile(
-    r"^\s*(Table|TABLE)\s+([IVXLCDM]+|\d+)\b",
+    r"^\s*(Table|TABLE)\s+([IVXLCDM]+|\d+)\s*(?:[:.\n\r]|$)",
     re.IGNORECASE,
 )
+
+# Verbs that almost always indicate "Table N <verb> ..." is BODY TEXT,
+# not a caption. We check this after _TAB_CAPTION_RE matches because the
+# regex above accepts a bare "Table 7" line and we don't want to reject
+# legitimate captions whose first line is just the label. Apply only when
+# the first line continues past the label with one of these verbs.
+_TAB_CAPTION_VERB_BLACKLIST = {
+    "presents", "shows", "lists", "displays", "contains",
+    "illustrates", "summarizes", "summarises", "reports",
+    "compares", "indicates", "describes", "demonstrates",
+    "highlights", "details", "provides",
+    # Chinese-paper variants — rare but cheap to include
+    "展示", "给出", "列出", "比较",
+}
 
 # When the caption block spans more than this fraction of page width,
 # the figure is treated as full-width across both columns.
@@ -67,6 +86,11 @@ _REGION_PAD_PT = 4.0
 # 1000+ chars, so we keep that threshold lenient.
 _MAX_FIG_CAPTION_CHARS = 1500
 _MAX_TAB_CAPTION_CHARS = 400
+
+# A real table caption's first line is short (label optionally followed by
+# a brief description). Body-text paragraphs that lead with "Table N" tend
+# to be much longer than this on the very first line.
+_MAX_TAB_CAPTION_FIRST_LINE_CHARS = 80
 
 
 @dataclass(frozen=True)
@@ -198,6 +222,17 @@ def _find_captions(page: ParsedPage) -> list[_Caption]:
         if m_tab and len(blk.text) > _MAX_TAB_CAPTION_CHARS:
             continue
 
+        # Body-text guard for tables: a real "Table N" caption either ends
+        # the first line at the label or follows it with a short noun
+        # phrase. "Table 7 presents the ablation study..." is body text
+        # describing the table; the actual caption is somewhere else on
+        # the page (or — in 2-column papers — at the top of the table).
+        if m_tab:
+            if len(first_line) > _MAX_TAB_CAPTION_FIRST_LINE_CHARS:
+                continue
+            if _is_table_body_paragraph(first_line, m_tab):
+                continue
+
         if m_fig:
             kind = "figure"
             label_kw, label = m_fig.group(1), m_fig.group(2)
@@ -220,6 +255,22 @@ def _find_captions(page: ParsedPage) -> list[_Caption]:
             full_text=blk.text.strip(),
         ))
     return captions
+
+
+def _is_table_body_paragraph(first_line: str, match: re.Match[str]) -> bool:
+    """Return True when "Table N <verb> ..." looks like body text rather
+    than a caption.
+
+    Heuristic: take the word immediately after the matched label (`Table 7`)
+    and check it against a verb blacklist. We deliberately accept lines
+    where the label is followed by punctuation, end-of-line, or a noun
+    phrase — those are real captions.
+    """
+    after = first_line[match.end():].lstrip(" \t:.")
+    if not after:
+        return False
+    next_word = after.split(maxsplit=1)[0]
+    return next_word.lower() in _TAB_CAPTION_VERB_BLACKLIST
 
 
 def _region_above_caption(

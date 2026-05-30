@@ -149,6 +149,13 @@ def _substitute(text: str, tvars: dict[str, str]) -> str:
 # Header line "## Page N" splits the script.md into per-page sections.
 _SCRIPT_PAGE_HEADER_RE = re.compile(r"^##\s*Page\s+(\d+)\s*$", re.MULTILINE)
 
+# A line of three or more dashes on its own marks the start of an optional
+# metadata fence at the END of the document (e.g. `total_chars: 1872`).
+# When present inside what would otherwise be the last page's notes, we
+# strip it so the script doesn't leak metadata into the speaker-notes pane
+# (which the TTS would also read aloud).
+_METADATA_FENCE_RE = re.compile(r"^-{3,}\s*$", re.MULTILINE)
+
 
 def parse_script_md(path: Path) -> dict[int, str]:
     """Read script.md and return {page_no -> spoken text}.
@@ -164,9 +171,15 @@ def parse_script_md(path: Path) -> dict[int, str]:
         ## Page 2
         ...
 
+        ---
+        total_chars: 1234              <- optional metadata fence; stripped
+        estimated_seconds: 320
+
     Headers other than `## Page N` and any text before the first `## Page`
-    header are dropped. Missing file returns an empty dict so the caller
-    can treat notes as optional.
+    header are dropped. A trailing `---` fence and everything after it is
+    treated as metadata and stripped from the LAST page's notes so the
+    .pptx speaker notes never contain `total_chars: ...` etc. Missing
+    file returns an empty dict so the caller can treat notes as optional.
     """
     path = Path(path)
     if not path.exists():
@@ -178,7 +191,14 @@ def parse_script_md(path: Path) -> dict[int, str]:
         page_no = int(m.group(1))
         body_start = m.end()
         body_end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
-        body = content[body_start:body_end].strip()
+        body = content[body_start:body_end]
+        # On the last page, strip an optional `---`-led metadata fence
+        # so `total_chars: ...` lines don't bleed into speaker notes.
+        if i == len(matches) - 1:
+            fence = _METADATA_FENCE_RE.search(body)
+            if fence:
+                body = body[: fence.start()]
+        body = body.strip()
         if body:
             notes[page_no] = body
     return notes
