@@ -76,7 +76,11 @@ class AnthropicScripter:
             template=cached_prompt("script", self._prompts_dir),
         )
         raw = self._llm.complete(prompt)
-        return _normalize_script_markdown(raw, expected_pages=len(plan.pages))
+        normalized = _normalize_script_markdown(raw, expected_pages=len(plan.pages))
+        # Post-process for TTS: rewrite Arabic digits / percentages / units
+        # the LLM may have left in the script. Idempotent.
+        from .tts_normalize import normalize_for_tts
+        return normalize_for_tts(normalized)
 
 
 # ---------------------------------------------------------------------------
