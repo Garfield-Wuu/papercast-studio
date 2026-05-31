@@ -11,6 +11,10 @@ import { Button } from "@/components/ui/Button";
 import { PipelineProgress } from "@/components/pipeline/PipelineProgress";
 import { EventLog } from "@/components/pipeline/EventLog";
 import { metaFor } from "@/lib/stage";
+import { ReviewPanel } from "@/components/review/ReviewPanel";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import type { components } from "@/lib/api.gen";
 
 const TERMINAL_STAGES = new Set(["published", "failed"]);
 
@@ -18,6 +22,12 @@ export function PaperDetailPage() {
   const { paperId } = useParams<{ paperId: string }>();
   const { data, isLoading, error } = usePaperDetail(paperId);
   const { events, connected } = usePaperEvents(paperId);
+  const { data: cfg } = useQuery<components["schemas"]["ConfigView"]>({
+    queryKey: ["config"],
+    queryFn: () => api.get("/config"),
+    staleTime: 60_000,
+  });
+  const defaultVoice = (cfg?.tts as { voice?: string } | undefined)?.voice;
   const start = useStartPaper();
   const stop = useStopPaper();
   const retry = useRetryPaper();
@@ -119,13 +129,7 @@ export function PaperDetailPage() {
           )}
         </div>
       ) : data.stage === "awaiting_review" ? (
-        <div className="rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm">
-          <div className="font-medium text-warning">等待人工审阅</div>
-          <p className="mt-1 text-fg-muted text-xs">
-            review/{paperId}/ 已就绪，使用 <code className="font-mono">papercast approve {paperId} --report-date YYYY-MM-DD --reviewer Wu</code> 推进。
-            P5 阶段将提供 webui 内审阅交互。
-          </p>
-        </div>
+        <ReviewPanel paperId={paperId} defaultVoice={defaultVoice} />
       ) : data.stage === "published" ? (
         <div className="rounded-lg border border-success/40 bg-success/10 p-4 text-sm">
           <div className="font-medium text-success">已发布</div>

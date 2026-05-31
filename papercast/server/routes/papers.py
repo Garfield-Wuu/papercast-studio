@@ -247,6 +247,121 @@ def retry_paper(
 
 
 # ---------------------------------------------------------------------------
+# Review-tab helpers — preview render + figure rerun/replace
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{paper_id}/preview-render")
+def preview_render(
+    paper_id: str,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """Render the assembled .pptx into PNGs for the Review tab.
+
+    Idempotent — if `work/<pid>/slides_png/` already has files, those
+    are returned. Otherwise LibreOffice runs once (~30s on first call)
+    and the result is cached on disk.
+
+    The route is intentionally separate from the `composed` stage:
+    that one renders at a higher DPI for video, and only after
+    approval. This one runs at 100 DPI for thumbnails and lets the
+    reviewer see the deck before approving.
+    """
+    if db.get_paper(paper_id) is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    from papercast.server.figures_service import render_slides_preview
+
+    try:
+        slides = render_slides_preview(cfg, paper_id)
+    except FileNotFoundError as e:
+        raise HTTPException(409, str(e))
+    return {
+        "paper_id": paper_id,
+        "slides": [
+            {
+                "page_no": s["page_no"],
+                "filename": s["filename"],
+                "url": f"/api/files/download?root=work&path={paper_id}/slides_png/{s['filename']}",
+            }
+            for s in slides
+        ],
+    }
+
+
+@router.post("/{paper_id}/figures/{figure_id}/rerun")
+def rerun_figure_route(
+    paper_id: str, figure_id: str,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """Re-extract a single figure with the current caption detector.
+
+    Useful after a fix lands (e.g. tightened table-caption regex) so
+    the user can refresh one image without redoing figures_split.
+    """
+    if db.get_paper(paper_id) is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    from papercast.server.figures_service import (
+        FigureNotFoundError, rerun_figure,
+    )
+
+    try:
+        record = rerun_figure(cfg, paper_id, figure_id)
+    except FigureNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "paper_id": paper_id,
+        "figure": record,
+        "url": f"/api/files/download?root=work&path={paper_id}/figures/{record['filename']}",
+    }
+
+
+@router.post("/{paper_id}/figures/{figure_id}/replace")
+async def replace_figure_route(
+    paper_id: str, figure_id: str,
+    file: UploadFile,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """Overwrite a figure's PNG bytes with an uploaded file.
+
+    The figures.json metadata (filename / bbox / caption) is preserved
+    — only the image bytes change. Accepts PNG / JPG / WebP; the
+    extension on disk stays whatever figures.json declared.
+    """
+    if db.get_paper(paper_id) is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    if not file.filename:
+        raise HTTPException(400, "no filename")
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in (".png", ".jpg", ".jpeg", ".webp"):
+        raise HTTPException(400, f"unsupported image type: {suffix}")
+
+    from papercast.server.figures_service import (
+        FigureNotFoundError, replace_figure,
+    )
+    content = await file.read()
+    try:
+        record = replace_figure(cfg, paper_id, figure_id, content)
+    except FigureNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "paper_id": paper_id,
+        "figure": record,
+        "url": f"/api/files/download?root=work&path={paper_id}/figures/{record['filename']}",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

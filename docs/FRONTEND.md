@@ -132,6 +132,46 @@ the cache.
 
 ---
 
+## ReviewPanel (P5)
+
+The 5-tab review surface that lets the user audit and approve a paper
+without leaving the browser. Lives in `src/components/review/` and
+mounts on `PaperDetailPage` whenever `stage === "awaiting_review"`.
+
+```
+review/
+├── ReviewPanel.tsx              # Tab container + footer (regenerate/approve)
+├── ReviewItem.tsx               # Reusable item card (checkbox + feedback)
+├── EditorDialog.tsx             # Monaco-in-Dialog (json / markdown)
+├── ApproveDialog.tsx            # report_date / reviewer / voice form
+├── PromptPreviewDialog.tsx      # Show LLM prompt without sending
+└── tabs/
+    ├── FiguresTab.tsx           # 缩略图 + 上传替换 + 重抽
+    ├── ReadingTab.tsx           # 5 段精读 + Monaco JSON 编辑
+    ├── SlidesTab.tsx            # PPT 缩略图墙 + 13 页卡片
+    ├── ScriptTab.tsx            # 按 Page N 分段 + Monaco MD 编辑
+    └── FactsTab.tsx             # fact_cards 表
+```
+
+State management: `useReviewState` keeps a per-tab `{checked, feedback}`
+map plus a `globalFeedback` string. Reading + Facts both write to
+`reading.json`, so we merge them into a single `target=reading`
+regenerate batch — Slides and Script get their own batches.
+
+Hooks layer:
+- `useArtifact` — GET / PUT a single text artifact
+- `useFigures` — figures meta + replace + rerun + slide preview render
+- `useRegenerate` — regenerate / preview / approve mutations
+- `useReviewState` — cross-tab review state reducer
+
+Editor: Monaco lazy-loaded via `@monaco-editor/react` (~3 MB chunk
+split out of the main bundle). `CodeEditor` wraps it with our token
+theme (`vs` / `vs-dark` follows `[data-theme]`).
+
+Note: WebSocket `needs_review` event is what tips the page into
+review mode; once `approve` succeeds the FSM advances to APPROVED
+and the panel collapses naturally on the next `paper` query refetch.
+
 ## Adding a new page
 
 1. Create `src/pages/MyPage.tsx`.

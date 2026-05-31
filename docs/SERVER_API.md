@@ -51,6 +51,9 @@ OpenAPI / interactive docs:
 | POST  | `/api/papers/{pid}/review/approve`                     | Reviewer approves; bake date; advance FSM; wake worker |
 | POST  | `/api/papers/{pid}/review/regenerate`                  | Localized LLM rewrite (target ∈ reading/slides_plan/script) |
 | POST  | `/api/papers/{pid}/review/regenerate/preview`          | Render the prompt that *would* be sent — no LLM call |
+| POST  | `/api/papers/{pid}/preview-render`                     | Render the assembled .pptx into PNG thumbnails (cached) |
+| POST  | `/api/papers/{pid}/figures/{figure_id}/rerun`          | Re-extract a single figure with the current caption detector |
+| POST  | `/api/papers/{pid}/figures/{figure_id}/replace`        | Overwrite figure PNG bytes with an uploaded image |
 | GET   | `/api/files/roots`                                     | Whitelisted root names |
 | GET   | `/api/files`                                           | List files under a root (query: `root`, `path`, `recurse`) |
 | GET   | `/api/files/download`                                  | Download a single file |
