@@ -40,6 +40,41 @@ def _load_secrets_env(secrets_path: Path) -> None:
             os.environ[k.strip()] = v
 
 
+def _normalize_cwd(explicit_config: str | None) -> None:
+    """Make sure the process cwd contains `config/config.yaml`.
+
+    All `Config.paths.*` defaults are relative ('./inbox', './work', ...);
+    every consumer resolves them against `os.getcwd()`. If the user
+    started the server from `webui/` or anywhere else, those paths point
+    at empty directories and the WebUI silently shows zero papers — a
+    very confusing failure mode (lost data!) that we hit twice during
+    development.
+
+    Strategy:
+      1. If `--config` is explicit, jump cwd to its parent's parent
+         (i.e. the dir that *contains* config/) so relative paths line up.
+      2. Otherwise walk up from cwd looking for `config/config.yaml`,
+         and chdir there if found within 4 levels.
+      3. If neither finds anything, leave cwd alone — the caller is
+         on their own (e.g. fresh install with no config yet).
+    """
+    if explicit_config:
+        cfg_path = Path(explicit_config).resolve()
+        if cfg_path.parent.name == "config":
+            target = cfg_path.parent.parent
+            if target.is_dir():
+                os.chdir(target)
+        return
+
+    here = Path.cwd().resolve()
+    candidates = [here, *list(here.parents)[:4]]  # up to 4 levels up
+    for parent in candidates:
+        if (parent / "config" / "config.yaml").is_file():
+            if parent != here:
+                os.chdir(parent)
+            return
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="papercast.server")
     parser.add_argument("--host", default="127.0.0.1")
@@ -54,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
                         choices=["critical", "error", "warning", "info", "debug", "trace"])
     args = parser.parse_args(argv)
 
+    _normalize_cwd(args.config)
     _load_secrets_env(Path(args.secrets))
 
     logging.basicConfig(

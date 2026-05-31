@@ -52,6 +52,28 @@ export function useVoices() {
   });
 }
 
+/**
+ * Pull a useful error message out of a non-2xx Response. The body can
+ * only be consumed once, so we always read it as text first and *then*
+ * try to JSON-parse it — calling `.json()` followed by `.text()` after
+ * a failure throws "body stream already read".
+ */
+async function extractErrorDetail(res: Response): Promise<string> {
+  let raw = "";
+  try {
+    raw = await res.text();
+  } catch {
+    return `${res.status} ${res.statusText}`;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed?.detail === "string") return parsed.detail;
+    return JSON.stringify(parsed);
+  } catch {
+    return raw || `${res.status} ${res.statusText}`;
+  }
+}
+
 export function useCloneVoice() {
   const qc = useQueryClient();
   return useMutation<CloneResponse, Error, CloneArgs>({
@@ -64,14 +86,7 @@ export function useCloneVoice() {
       fd.append("file", args.file);
       const res = await fetch(`/api/voice/clone`, { method: "POST", body: fd });
       if (!res.ok) {
-        let detail: string | undefined;
-        try {
-          const data = await res.json();
-          detail = typeof data?.detail === "string" ? data.detail : JSON.stringify(data);
-        } catch {
-          detail = await res.text();
-        }
-        throw new Error(detail || `${res.status} ${res.statusText}`);
+        throw new Error(await extractErrorDetail(res));
       }
       return (await res.json()) as CloneResponse;
     },
@@ -100,14 +115,7 @@ export function usePreviewVoice() {
         body: JSON.stringify(args),
       });
       if (!res.ok) {
-        let detail: string | undefined;
-        try {
-          const data = await res.json();
-          detail = typeof data?.detail === "string" ? data.detail : JSON.stringify(data);
-        } catch {
-          detail = await res.text();
-        }
-        throw new Error(detail || `${res.status} ${res.statusText}`);
+        throw new Error(await extractErrorDetail(res));
       }
       return await res.blob();
     },
