@@ -75,13 +75,16 @@ def _fingerprint_secrets(cfg: Config) -> dict[str, str]:
     """Show that an env var is set without leaking its value.
 
     Format: 'sk-ant***Vuw' (first 6 + '***' + last 3 chars). Empty or
-    unset → 'unset'. Surface the keys the WebUI actually cares about.
+    unset → 'unset'. Surface the keys the WebUI actually cares about
+    (Reader / Author LLM keys + MiniMax). The Hermes-era Discord
+    notifier env var is intentionally omitted — it's still readable in
+    yaml for backwards compatibility but the user-facing settings panel
+    no longer manages it.
     """
     interesting = [
         cfg.llm.reader.api_key_env,
         cfg.llm.author.api_key_env,
         "MINIMAX_API_KEY",
-        cfg.review.notify.discord_webhook_env,
     ]
     out: dict[str, str] = {}
     for env_name in interesting:

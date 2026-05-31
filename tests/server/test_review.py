@@ -44,6 +44,56 @@ def _force_stage(workspace: Path, paper_id: str, target_stage_value: str) -> Non
 # ---------------------------------------------------------------------------
 
 
+def test_apply_start_meta_writes_file(workspace: Path) -> None:
+    """P7: apply_start_meta persists Cover values to start_meta.json."""
+    from papercast.core.config import load
+    from papercast.server.review_service import apply_start_meta, load_start_meta
+
+    cfg = load(workspace / "config" / "config.yaml")
+    paper_id = "abc123"
+    apply_start_meta(
+        cfg, paper_id,
+        report_date="2026年5月17日",
+        reviewer="张三",
+        major="计算机视觉",
+    )
+    meta = load_start_meta(cfg, paper_id)
+    assert meta == {
+        "report_date": "2026年5月17日",
+        "reviewer": "张三",
+        "major": "计算机视觉",
+    }
+
+
+def test_approve_falls_back_to_start_meta(
+    client: TestClient, workspace: Path,
+) -> None:
+    """P7: approve without report_date/reviewer should pull from start_meta.json."""
+    pid = _upload(client, workspace)
+    _force_stage(workspace, pid, "awaiting_review")
+
+    # Pretend the user filled the StartPaperDialog at upload.
+    from papercast.core.config import load
+    from papercast.server.review_service import apply_start_meta
+    cfg = load(workspace / "config" / "config.yaml")
+    apply_start_meta(
+        cfg, pid,
+        report_date="2026年6月1日",
+        reviewer="Garfield",
+        major="ML",
+    )
+
+    # Approve without supplying date/reviewer — should reuse start_meta.
+    r = client.post(
+        f"/api/papers/{pid}/review/approve",
+        json={"voice": "xhsgarfield1"},
+    )
+    assert r.status_code == 200, r.text
+    approval = r.json()["approval"]
+    assert approval["report_date"] == "2026年6月1日"
+    assert approval["reviewer"] == "Garfield"
+
+
 def test_approve_writes_approval_json_and_advances(
     client: TestClient, workspace: Path,
 ) -> None:

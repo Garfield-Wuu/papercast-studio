@@ -195,3 +195,121 @@ def test_scan_picks_up_pdfs_already_in_inbox(
     rows = r.json()
     assert len(rows) == 1
     assert rows[0]["filename"] == "preplaced.pdf"
+
+
+# ---------------------------------------------------------------------------
+# P7: 50MB limit + start body + events history
+# ---------------------------------------------------------------------------
+
+
+def test_upload_rejects_oversize_pdf(
+    client: TestClient, workspace: Path,
+) -> None:
+    """A PDF over 50MB returns 413 and leaves nothing in the inbox."""
+    big = b"%PDF-1.4\n" + b"\x00" * (51 * 1024 * 1024)
+    r = client.post(
+        "/api/papers",
+        files={"file": ("huge.pdf", io.BytesIO(big), "application/pdf")},
+    )
+    assert r.status_code == 413
+    # cleanup happened — no leftover in inbox.
+    assert not (workspace / "inbox" / "huge.pdf").exists()
+
+
+def test_start_persists_cover_meta(
+    client: TestClient, workspace: Path,
+) -> None:
+    """POST /start with a body writes review/<pid>/start_meta.json."""
+    pdf = _make_synthetic_pdf(workspace / "demo.pdf")
+    with pdf.open("rb") as f:
+        pid = client.post("/api/papers", files={"file": ("demo.pdf", f, "application/pdf")}).json()["paper_id"]
+
+    from papercast.core.state import Stage
+    orch = client.app.state.orchestrator
+    stub = lambda _cfg, _pid: None
+    orch._runners = {s: stub for s in Stage}  # noqa: SLF001 — test injection
+
+    r = client.post(
+        f"/api/papers/{pid}/start",
+        json={
+            "report_date": "2026年5月17日",
+            "reviewer": "张三",
+            "major": "计算机视觉",
+        },
+    )
+    assert r.status_code == 200, r.text
+
+    import json
+    meta_path = workspace / "review" / pid / "start_meta.json"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["report_date"] == "2026年5月17日"
+    assert meta["reviewer"] == "张三"
+    assert meta["major"] == "计算机视觉"
+
+
+def test_start_without_body_works(
+    client: TestClient, workspace: Path,
+) -> None:
+    """Existing CLI-style start (no body) still works for backwards compat."""
+    pdf = _make_synthetic_pdf(workspace / "demo.pdf")
+    with pdf.open("rb") as f:
+        pid = client.post("/api/papers", files={"file": ("demo.pdf", f, "application/pdf")}).json()["paper_id"]
+
+    from papercast.core.state import Stage
+    orch = client.app.state.orchestrator
+    stub = lambda _cfg, _pid: None
+    orch._runners = {s: stub for s in Stage}  # noqa: SLF001 — test injection
+
+    r = client.post(f"/api/papers/{pid}/start")
+    assert r.status_code == 200
+    # No file written when no body sent.
+    assert not (workspace / "review" / pid / "start_meta.json").exists()
+
+
+def test_events_history_replays_stage_transitions(
+    client: TestClient, workspace: Path,
+) -> None:
+    pdf = _make_synthetic_pdf(workspace / "demo.pdf")
+    with pdf.open("rb") as f:
+        pid = client.post("/api/papers", files={"file": ("demo.pdf", f, "application/pdf")}).json()["paper_id"]
+
+    # Push the paper through a couple of stages directly via DB.
+    from papercast.core.db import Database
+    from papercast.core.state import Stage
+    db = Database(workspace / "logs" / "papercast.sqlite")
+    rec = db.get_paper(pid)
+    rec.advance(Stage.PARSED)
+    rec.advance(Stage.FIGURES_SPLIT)
+    db.update_paper(rec)
+
+    r = client.get(f"/api/papers/{pid}/events")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["paper_id"] == pid
+    types = [e["type"] for e in body["events"]]
+    stages = [e["stage"] for e in body["events"]]
+    assert all(t == "stage_advanced" for t in types)
+    assert "ingested" in stages
+    assert "parsed" in stages
+    assert "figures_split" in stages
+
+
+def test_events_history_includes_failed_with_error(
+    client: TestClient, workspace: Path,
+) -> None:
+    pdf = _make_synthetic_pdf(workspace / "demo.pdf")
+    with pdf.open("rb") as f:
+        pid = client.post("/api/papers", files={"file": ("demo.pdf", f, "application/pdf")}).json()["paper_id"]
+
+    from papercast.core.db import Database
+    db = Database(workspace / "logs" / "papercast.sqlite")
+    rec = db.get_paper(pid)
+    rec.fail("template missing")
+    db.update_paper(rec)
+
+    r = client.get(f"/api/papers/{pid}/events")
+    body = r.json()
+    failed = [e for e in body["events"] if e["type"] == "failed"]
+    assert failed
+    assert failed[0]["error"] == "template missing"

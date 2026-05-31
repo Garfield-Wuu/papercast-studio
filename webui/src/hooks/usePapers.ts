@@ -45,11 +45,29 @@ export function useDeletePaper() {
   });
 }
 
+export interface StartPaperArgs {
+  paperId: string;
+  report_date?: string;
+  reviewer?: string;
+  major?: string;
+}
+
 export function useStartPaper() {
   const qc = useQueryClient();
-  return useMutation<unknown, Error, string>({
-    mutationFn: (pid) => api.post(`/papers/${pid}/start`),
-    onSuccess: (_, pid) => {
+  return useMutation<unknown, Error, string | StartPaperArgs>({
+    mutationFn: (arg) => {
+      if (typeof arg === "string") {
+        return api.post(`/papers/${arg}/start`);
+      }
+      const { paperId, ...body } = arg;
+      // The server treats an empty body the same as no body, but FastAPI
+      // would 422 if we sent `null` as JSON; only send a body when at
+      // least one field is filled in.
+      const hasFields = Object.values(body).some((v) => v !== undefined && v !== "");
+      return api.post(`/papers/${paperId}/start`, hasFields ? body : undefined);
+    },
+    onSuccess: (_, arg) => {
+      const pid = typeof arg === "string" ? arg : arg.paperId;
       qc.invalidateQueries({ queryKey: PAPERS_KEY });
       qc.invalidateQueries({ queryKey: ["paper", pid] });
     },

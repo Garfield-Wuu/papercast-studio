@@ -29,6 +29,15 @@ ALLOWED_ROOTS: tuple[str, ...] = (
     "template", "template_meta", "prompts", "logs",
 )
 
+# Roots the WebUI's file-explorer surface (`GET /api/files/roots`,
+# `GET /api/files`) is allowed to list. The Review tab still pulls
+# figure thumbnails directly via `download?root=work&path=...` —
+# that's a controlled URL, not a free directory listing. Keeping the
+# delete and list whitelists tight while leaving download permissive
+# means the user can manage their deliverables without being able to
+# rummage through internal pipeline state.
+PUBLIC_LIST_ROOTS: tuple[str, ...] = ("output", "archive")
+
 
 def root_path(cfg: Config, root: str) -> Path:
     """Return the base directory for `root` ('inbox', 'work', ...)."""

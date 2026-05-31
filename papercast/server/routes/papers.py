@@ -99,6 +99,12 @@ class CreateResponse(BaseModel):
     already_exists: bool = False
 
 
+# Hard cap on uploaded PDFs. Lab papers are typically 1-15MB; 50MB
+# blocks accidental scans of bound theses while leaving room for the
+# rare arXiv preprint with embedded figures.
+_MAX_PDF_BYTES = 50 * 1024 * 1024
+
+
 @router.post("", response_model=CreateResponse, status_code=201)
 async def upload_paper(
     file: UploadFile,
@@ -117,13 +123,25 @@ async def upload_paper(
     inbox.mkdir(parents=True, exist_ok=True)
     target_in_inbox = inbox / file.filename
 
-    # Stream the upload to disk so big PDFs don't sit in RAM.
-    with target_in_inbox.open("wb") as f:
-        while True:
-            chunk = await file.read(1 << 20)
-            if not chunk:
-                break
-            f.write(chunk)
+    # Stream the upload to disk so big PDFs don't sit in RAM, but bail
+    # out (and clean up) if the running total crosses _MAX_PDF_BYTES.
+    written = 0
+    try:
+        with target_in_inbox.open("wb") as f:
+            while True:
+                chunk = await file.read(1 << 20)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > _MAX_PDF_BYTES:
+                    raise HTTPException(
+                        413,
+                        f"PDF exceeds {_MAX_PDF_BYTES // (1024 * 1024)}MB limit",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        target_in_inbox.unlink(missing_ok=True)
+        raise
 
     pid = paper_id_for(target_in_inbox)
     if db.get_paper(pid) is not None:
@@ -195,16 +213,40 @@ def delete_paper(
 # ---------------------------------------------------------------------------
 
 
+class StartPaperRequest(BaseModel):
+    report_date: str | None = None
+    reviewer: str | None = None
+    major: str | None = None
+
+
 @router.post("/{paper_id}/start")
 async def start_paper(
-    paper_id: str, request: Request, db: Database = Depends(get_db),
+    paper_id: str, request: Request,
+    body: StartPaperRequest | None = None,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Kick off the JobOrchestrator for this paper."""
+    """Kick off the JobOrchestrator for this paper.
+
+    Optional body collects reviewer-supplied Cover values (`report_date`,
+    `reviewer`, `major`). They're persisted to
+    `review/<pid>/start_meta.json` so the planner runner can include
+    them in its prompt and the approval step can re-bake the .pptx
+    without re-running the LLM.
+    """
     if db.get_paper(paper_id) is None:
         raise HTTPException(404, f"unknown paper {paper_id}")
     orchestrator = request.app.state.orchestrator
     if orchestrator is None:
         raise HTTPException(503, "JobOrchestrator not yet wired (P2.4)")
+    if body is not None:
+        from ..review_service import apply_start_meta
+        apply_start_meta(
+            cfg, paper_id,
+            report_date=body.report_date,
+            reviewer=body.reviewer,
+            major=body.major,
+        )
     await orchestrator.start(paper_id)
     return {"started": paper_id}
 
@@ -364,6 +406,40 @@ async def replace_figure_route(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+@router.get("/{paper_id}/events")
+def list_paper_events(
+    paper_id: str,
+    db: Database = Depends(get_db),
+) -> dict[str, Any]:
+    """Replay the per-paper history as a list of WebSocket-shaped events.
+
+    Used by the WebUI when entering a detail page: render a baseline
+    timeline before the live `/ws/papers/{pid}` stream takes over. Each
+    successful Stage transition becomes one `stage_advanced` event;
+    error messages become `failed` events at the FAILED transition.
+    """
+    rec = db.get_paper(paper_id)
+    if rec is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    events: list[dict[str, Any]] = []
+    error_iter = iter(rec.errors)
+    for h in rec.history:
+        if h.stage is Stage.FAILED:
+            events.append({
+                "type": "failed",
+                "stage": h.stage.value,
+                "ts": h.ts,
+                "error": next(error_iter, "（无详细信息）"),
+            })
+        else:
+            events.append({
+                "type": "stage_advanced",
+                "stage": h.stage.value,
+                "ts": h.ts,
+            })
+    return {"paper_id": paper_id, "events": events}
 
 
 def _title_for(cfg: Config, paper_id: str) -> str | None:

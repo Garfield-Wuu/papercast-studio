@@ -56,6 +56,7 @@ class SlidesPlanner(Protocol):
         target_pages: tuple[int, int] = (12, 15),
         target_duration_sec: int = 480,
         report_date_placeholder: str = "{{REPORT_DATE}}",
+        cover_meta: dict[str, str] | None = None,
     ) -> SlidesPlan: ...
 
 
@@ -86,6 +87,7 @@ class AnthropicPlanner:
         target_pages: tuple[int, int] = (12, 15),
         target_duration_sec: int = 480,
         report_date_placeholder: str = "{{REPORT_DATE}}",
+        cover_meta: dict[str, str] | None = None,
     ) -> SlidesPlan:
         prompt = build_planner_prompt(
             reading=reading,
@@ -94,6 +96,7 @@ class AnthropicPlanner:
             target_pages=target_pages,
             target_duration_sec=target_duration_sec,
             report_date_placeholder=report_date_placeholder,
+            cover_meta=cover_meta,
             template=cached_prompt("slides_plan", self._prompts_dir),
         )
         raw = self._llm.complete(prompt)
@@ -118,16 +121,25 @@ def build_planner_prompt(
     target_duration_sec: int,
     report_date_placeholder: str,
     template: str,
+    cover_meta: dict[str, str] | None = None,
 ) -> str:
     """Concatenate the markdown template with a structured context block.
 
     Kept verbose / readable so prompts/slides_plan.md stays the source of
     truth for *style guidance* and this file stays the source of truth
     for *what data the model sees*.
+
+    `cover_meta` (optional) carries reviewer-supplied values for the
+    Cover slide — `REPORTER` (name), `MAJOR` (research field/dept). The
+    model is told to put them on the Cover via `{{REPORTER}}` /
+    `{{MAJOR}}` placeholders so the human gate at approval time can
+    re-bake them without re-running the LLM. Unset values fall back to
+    the literal placeholder so a later approve can fill them in.
     """
     reading_json = json.dumps(asdict(reading), ensure_ascii=False, indent=2)
     figures_block = _format_figures(figures)
     layouts_block = _format_layouts(template_meta)
+    cover_block = _format_cover_meta(cover_meta or {}, report_date_placeholder)
 
     return f"""\
 {template}
@@ -139,7 +151,9 @@ def build_planner_prompt(
 ## 目标页数与时长
 - 总页数目标：{target_pages[0]}–{target_pages[1]} 页（硬上下限：10–17）
 - 目标总时长：{target_duration_sec} 秒（按 220 字/分钟估算）
-- Cover 上的日期占位符：`{report_date_placeholder}`（保留原样，由审核阶段替换）
+
+## Cover 字段（务必填到第 1 页 layout=Cover 的 fields 里）
+{cover_block}
 
 ## reading.json（五段式精读）
 ```json
@@ -171,6 +185,30 @@ def build_planner_prompt(
 - JSON 字符串值内**禁止**出现未转义的 ASCII 双引号 (")。中文引用请使用「」或《》；
   如必须使用 ASCII 双引号则必须转义为 \"。不允许尾随逗号。输出必须通过 `json.loads` 解析。
 """
+
+
+def _format_cover_meta(meta: dict[str, str], date_placeholder: str) -> str:
+    """Spell out which placeholders the Cover should carry.
+
+    The values themselves are NOT inlined into the prompt — we deliberately
+    pass placeholders so the human-approval step can substitute them later
+    without re-running the LLM. This keeps reviewer edits to date /
+    reporter / major free.
+    """
+    reporter = meta.get("REPORTER")
+    major = meta.get("MAJOR")
+    lines: list[str] = []
+    lines.append(f"- 日期占位符：`{date_placeholder}`（保留原样，由审核阶段替换）")
+    if reporter or major:
+        # Compose a Reporter line that covers both name + major when present.
+        # Cover.Reporter is the only relevant placeholder in the template — we
+        # encode major into the same string with a separator the user can edit.
+        composed = "{{REPORTER}}" + (" · {{MAJOR}}" if major else "")
+        lines.append(f"- 汇报人字段（Cover.Reporter）必须设置为：`{composed}`")
+        lines.append("  保留 `{{REPORTER}}` / `{{MAJOR}}` 占位符原样；审核时由后端替换。")
+    else:
+        lines.append("- 汇报人字段（Cover.Reporter）：保留为 `{{REPORTER}}`（审核时替换）。")
+    return "\n".join(lines)
 
 
 def _format_figures(figures: list[FigureRecord]) -> str:

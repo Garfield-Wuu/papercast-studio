@@ -192,6 +192,44 @@ def test_build_prompt_handles_no_layouts_gracefully() -> None:
     assert "meta 未提供 layouts" in prompt
 
 
+def test_build_prompt_surfaces_cover_meta_placeholders() -> None:
+    """When the user supplies REPORTER/MAJOR at start time the prompt should
+    instruct the model to keep them as `{{REPORTER}}` / `{{MAJOR}}` literals
+    on the Cover (so approval can substitute them later)."""
+    prompt = build_planner_prompt(
+        reading=_stub_reading(),
+        figures=[],
+        template_meta=_stub_template_meta(),
+        target_pages=(12, 15),
+        target_duration_sec=480,
+        report_date_placeholder="{{REPORT_DATE}}",
+        template="planner",
+        cover_meta={"REPORTER": "张三", "MAJOR": "计算机视觉"},
+    )
+    assert "{{REPORTER}}" in prompt
+    assert "{{MAJOR}}" in prompt
+    # The literal user values should NOT be inlined — they're substituted at
+    # approval time, so the LLM only ever sees placeholders.
+    assert "张三" not in prompt
+    assert "计算机视觉" not in prompt
+
+
+def test_build_prompt_cover_meta_optional() -> None:
+    """No cover_meta: the prompt still mentions REPORT_DATE but tells the
+    model to leave REPORTER as a literal placeholder."""
+    prompt = build_planner_prompt(
+        reading=_stub_reading(),
+        figures=[],
+        template_meta=_stub_template_meta(),
+        target_pages=(12, 15),
+        target_duration_sec=480,
+        report_date_placeholder="{{REPORT_DATE}}",
+        template="planner",
+    )
+    assert "{{REPORT_DATE}}" in prompt
+    assert "{{REPORTER}}" in prompt
+
+
 # ---------------------------------------------------------------------------
 # Response parsing
 # ---------------------------------------------------------------------------

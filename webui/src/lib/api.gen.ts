@@ -149,6 +149,12 @@ export interface paths {
         /**
          * Start Paper
          * @description Kick off the JobOrchestrator for this paper.
+         *
+         *     Optional body collects reviewer-supplied Cover values (`report_date`,
+         *     `reviewer`, `major`). They're persisted to
+         *     `review/<pid>/start_meta.json` so the planner runner can include
+         *     them in its prompt and the approval step can re-bake the .pptx
+         *     without re-running the LLM.
          */
         post: operations["start_paper_api_papers__paper_id__start_post"];
         delete?: never;
@@ -271,6 +277,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/papers/{paper_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Paper Events
+         * @description Replay the per-paper history as a list of WebSocket-shaped events.
+         *
+         *     Used by the WebUI when entering a detail page: render a baseline
+         *     timeline before the live `/ws/papers/{pid}` stream takes over. Each
+         *     successful Stage transition becomes one `stage_advanced` event;
+         *     error messages become `failed` events at the FAILED transition.
+         */
+        get: operations["list_paper_events_api_papers__paper_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/papers/{paper_id}/artifacts": {
         parameters: {
             query?: never;
@@ -354,8 +385,7 @@ export interface paths {
         };
         /**
          * List Roots
-         * @description Available root names. The WebUI uses this to populate the file
-         *     tree's top level.
+         * @description Listable root names. Tight by design — see PUBLIC_LIST_ROOTS.
          */
         get: operations["list_roots_api_files_roots_get"];
         put?: never;
@@ -393,9 +423,10 @@ export interface paths {
         };
         /**
          * Download File
-         * @description Download a single file. Used by the WebUI for cases where a
-         *     direct link to the file is more useful than the artifact wrapper
-         *     (e.g. re-downloading the .pptx for local editing).
+         * @description Download a single file. Permissive by design — the Review tab's
+         *     figure thumbnails and the FilesPage cards both call this with paths
+         *     the server itself emitted. `safe_resolve` keeps the path inside the
+         *     declared root, so traversal attempts (`../../foo`) still 403.
          */
         get: operations["download_file_api_files_download_get"];
         put?: never;
@@ -446,6 +477,36 @@ export interface paths {
          *     headless servers / different desktop environments may no-op.
          */
         post: operations["reveal_in_explorer_api_files_reveal_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/files/papers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Paper Files
+         * @description One entry per paper, listing the user-facing deliverables.
+         *
+         *     For each paper we surface (when present):
+         *       - source_pdf  in archive/    : the original upload
+         *       - deck_pptx   in review/<pid>: the assembled deck after script_done
+         *       - video_mp4   in output/     : the final published video
+         *
+         *     Pipeline-internal artifacts (work/<pid>/{reading,slides_plan,script}.json,
+         *     figures, audio chunks, voicer_tasks, ...) are NOT exposed here —
+         *     they're available via the per-paper artifact API used by the Review
+         *     tab, but a casual user shouldn't be wading through them.
+         */
+        get: operations["list_paper_files_api_files_papers_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -870,6 +931,39 @@ export interface components {
             /** Output Path */
             output_path?: string | null;
         };
+        /** PaperFileEntry */
+        PaperFileEntry: {
+            /** Kind */
+            kind: string;
+            /** Root */
+            root: string;
+            /** Path */
+            path: string;
+            /** Filename */
+            filename: string;
+            /** Size */
+            size?: number | null;
+            /** Mtime */
+            mtime?: string | null;
+        };
+        /** PaperFiles */
+        PaperFiles: {
+            /** Paper Id */
+            paper_id: string;
+            /** Title */
+            title?: string | null;
+            /** Filename */
+            filename: string;
+            /** Stage */
+            stage: string;
+            /** Ingested At */
+            ingested_at: string;
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["PaperFileEntry"][];
+        };
         /** PaperHistoryEntry */
         PaperHistoryEntry: {
             stage: components["schemas"]["Stage"];
@@ -963,6 +1057,15 @@ export interface components {
          * @enum {string}
          */
         Stage: "ingested" | "parsed" | "figures_split" | "read_done" | "slides_done" | "script_done" | "awaiting_review" | "approved" | "tts_submitted" | "tts_done" | "composed" | "published" | "failed";
+        /** StartPaperRequest */
+        StartPaperRequest: {
+            /** Report Date */
+            report_date?: string | null;
+            /** Reviewer */
+            reviewer?: string | null;
+            /** Major */
+            major?: string | null;
+        };
         /** TextWriteRequest */
         TextWriteRequest: {
             /** Content */
@@ -1258,7 +1361,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["StartPaperRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1453,6 +1560,39 @@ export interface operations {
             };
         };
     };
+    list_paper_events_api_papers__paper_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paper_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_paper_artifacts_api_papers__paper_id__artifacts_get: {
         parameters: {
             query?: never;
@@ -1619,7 +1759,7 @@ export interface operations {
     list_files_api_files_get: {
         parameters: {
             query: {
-                /** @description one of: inbox, archive, work, review, output, template, template_meta, prompts, logs */
+                /** @description one of: output, archive */
                 root: string;
                 /** @description relative path under the root */
                 path?: string;
@@ -1788,6 +1928,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_paper_files_api_files_papers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaperFiles"][];
                 };
             };
         };

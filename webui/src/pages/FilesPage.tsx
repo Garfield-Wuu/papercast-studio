@@ -1,215 +1,256 @@
-import { useCallback, useState } from "react";
-import { Download, Eye, Trash2, Upload as UploadIcon } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  FileText,
+  FileSpreadsheet,
+  Film,
+  Download,
+  ExternalLink,
+  Trash2,
+  Search,
+  ArrowRight,
+  AlertCircle,
+  type LucideIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { FileTree } from "@/components/files/FileTree";
+import { Input } from "@/components/ui/Input";
 import {
   downloadUrl,
   useDeletePath,
+  usePaperFiles,
   useReveal,
-  useRoots,
-  useUploadToRoot,
-  type FileNode,
+  type PaperFileEntry,
+  type PaperFiles,
 } from "@/hooks/useFiles";
+import { metaFor } from "@/lib/stage";
 import { cn } from "@/lib/cn";
 
-const READONLY_ROOTS = new Set(["archive", "templates", "prompts"]);
-const DELETE_ALLOWED = new Set(["inbox", "work", "review", "output", "logs"]);
+const KIND_LABELS: Record<PaperFileEntry["kind"], { label: string; icon: LucideIcon }> = {
+  source_pdf: { label: "原文 PDF", icon: FileText },
+  deck_pptx: { label: "演示 PPT", icon: FileSpreadsheet },
+  video_mp4: { label: "视频", icon: Film },
+};
 
+const KIND_ORDER: PaperFileEntry["kind"][] = ["video_mp4", "deck_pptx", "source_pdf"];
+
+/**
+ * Per-paper file management (P7 revision).
+ *
+ *   - One card per paper, listing the source PDF / assembled deck /
+ *     published video. The directory tree is gone; the user only sees
+ *     deliverables, not pipeline internals.
+ *   - Search filter + stage chip so the user can skim a long list.
+ *   - Upload happens on the 任务 page (UploadDropzone), not here.
+ */
 export function FilesPage() {
-  const { data: rootsResp } = useRoots();
-  const roots = rootsResp?.roots ?? [];
-  const [activeRoot, setActiveRoot] = useState<string>("inbox");
-  const [selected, setSelected] = useState<FileNode | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
+  const { data, isLoading, error, refetch } = usePaperFiles();
+  const [query, setQuery] = useState("");
 
-  const upload = useUploadToRoot();
-  const del = useDeletePath();
-  const reveal = useReveal();
-
-  const handleDrop = useCallback(
-    async (files: FileList | null) => {
-      if (!files || files.length === 0) return;
-      setUploading(true);
-      try {
-        for (const f of Array.from(files)) {
-          await upload.mutateAsync({ root: "inbox", file: f });
-        }
-      } finally {
-        setUploading(false);
-      }
-    },
-    [upload],
-  );
-
-  const isReadOnly = READONLY_ROOTS.has(activeRoot);
-  const canDelete = selected && DELETE_ALLOWED.has(activeRoot);
+  const filtered = useMemo<PaperFiles[]>(() => {
+    if (!data) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return data;
+    return data.filter((p) =>
+      p.paper_id.toLowerCase().includes(q) ||
+      p.filename.toLowerCase().includes(q) ||
+      (p.title?.toLowerCase().includes(q) ?? false),
+    );
+  }, [data, query]);
 
   return (
-    <div className="mx-auto max-w-screen-2xl px-5 py-8 space-y-6">
-      <header>
-        <h1>文件管理</h1>
-        <p className="mt-1 text-sm text-fg-muted">
-          浏览 inbox / work / review / output 等所有运行时目录。仅 inbox 可上传，archive / templates / prompts 只读。
-        </p>
+    <div className="mx-auto max-w-screen-xl px-5 py-8 space-y-6">
+      <header className="flex items-end justify-between gap-4">
+        <div>
+          <h1>文件管理</h1>
+          <p className="mt-1 text-sm text-fg-muted">
+            按论文展示已生成的 PPT、视频与原文 PDF。删除会从磁盘移除文件，但任务记录与流水线状态保留。
+          </p>
+        </div>
+        <span className="text-xs text-fg-muted whitespace-nowrap">
+          共 {data?.length ?? 0} 篇 · 显示 {filtered.length}
+        </span>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[200px_1fr] gap-4">
-        {/* Roots */}
-        <aside className="rounded-lg border border-border bg-surface overflow-hidden">
-          <ul className="text-sm">
-            {roots.map((r) => (
-              <li key={r}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setActiveRoot(r);
-                    setSelected(null);
-                  }}
-                  className={cn(
-                    "block w-full px-4 py-2 text-left transition-colors",
-                    "hover:bg-surface-2",
-                    activeRoot === r &&
-                      "bg-accent-soft text-accent font-medium",
-                    READONLY_ROOTS.has(r) && "italic",
-                  )}
-                  title={READONLY_ROOTS.has(r) ? "只读" : undefined}
-                >
-                  {r}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </aside>
-
-        {/* Main panel */}
-        <main className="space-y-4">
-          {/* Tree */}
-          <Card>
-            <div className="border-b border-border px-4 py-2 flex items-center justify-between">
-              <span className="text-sm font-medium text-fg flex items-center gap-2">
-                <span className="font-mono">{activeRoot}/</span>
-                {isReadOnly && (
-                  <span className="text-xs text-fg-muted/70">（只读）</span>
-                )}
-              </span>
-              {selected && (
-                <span className="text-xs text-fg-muted truncate max-w-md">
-                  选中：{selected.rel_path || "（根）"}
-                </span>
-              )}
-            </div>
-            <div className="max-h-[60vh] overflow-y-auto scrollbar-thin py-1">
-              <FileTree
-                root={activeRoot}
-                selectedPath={selected?.rel_path ?? null}
-                onSelect={setSelected}
-              />
-            </div>
-          </Card>
-
-          {/* Actions for selected file */}
-          {selected && !selected.is_dir && (
-            <Card>
-              <div className="px-4 py-3 flex flex-wrap items-center gap-3">
-                <span className="font-mono text-sm text-fg flex-1 truncate">
-                  {selected.rel_path}
-                </span>
-                <Button asChild variant="secondary" size="sm">
-                  <a
-                    href={downloadUrl(activeRoot, selected.rel_path)}
-                    download={selected.name}
-                  >
-                    <Download size={14} />
-                    下载
-                  </a>
-                </Button>
-                <Button asChild variant="ghost" size="sm">
-                  <a
-                    href={downloadUrl(activeRoot, selected.rel_path)}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <Eye size={14} />
-                    在新页面打开
-                  </a>
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={reveal.isPending}
-                  onClick={() =>
-                    reveal.mutate({ root: activeRoot, path: selected.rel_path })
-                  }
-                  title="在系统资源管理器中定位（仅本机）"
-                >
-                  <Eye size={14} />
-                  在系统中打开
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={!canDelete || del.isPending}
-                  onClick={() => {
-                    if (!confirm(`删除 ${activeRoot}/${selected.rel_path}？`)) return;
-                    del.mutate(
-                      { root: activeRoot, path: selected.rel_path },
-                      { onSuccess: () => setSelected(null) },
-                    );
-                  }}
-                  title={
-                    !canDelete
-                      ? `不允许在 ${activeRoot} 下删除`
-                      : "删除"
-                  }
-                >
-                  <Trash2 size={14} className="text-danger" />
-                  删除
-                </Button>
-              </div>
-            </Card>
-          )}
-
-          {/* Upload zone (inbox only, regardless of activeRoot) */}
-          <Card>
-            <label
-              className={cn(
-                "block px-6 py-8 cursor-pointer text-center transition-colors",
-                dragOver
-                  ? "bg-accent-soft/40 text-fg"
-                  : "text-fg-muted hover:bg-surface-2",
-              )}
-              onDragOver={(e) => {
-                e.preventDefault();
-                setDragOver(true);
-              }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setDragOver(false);
-                handleDrop(e.dataTransfer.files);
-              }}
-            >
-              <UploadIcon size={20} className="inline-block text-accent mr-2" />
-              <span className="text-sm">
-                {uploading
-                  ? "上传中…"
-                  : "拖拽文件到这里上传到 inbox（多文件支持）"}
-              </span>
-              <input
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  handleDrop(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-            </label>
-          </Card>
-        </main>
+      <div className="relative max-w-md">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted/70" />
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="搜索 paper_id / 文件名 / 标题"
+          className="pl-8"
+        />
       </div>
+
+      {error && (
+        <Card tone="danger">
+          <div className="flex items-center gap-2 px-4 py-3 text-sm text-danger">
+            <AlertCircle size={14} />
+            加载失败：{(error as Error).message}
+            <Button variant="ghost" size="sm" onClick={() => refetch()}>
+              重试
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {isLoading && !data ? (
+        <div className="rounded-lg border border-border bg-surface p-8 text-fg-muted">
+          正在加载…
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border bg-surface p-10 text-center text-fg-muted">
+          {query ? `没有匹配「${query}」的论文。` : "还没有任何论文。先到「任务」页上传 PDF。"}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {filtered.map((p) => (
+            <PaperCard key={p.paper_id} paper={p} />
+          ))}
+        </div>
+      )}
     </div>
   );
+}
+
+function PaperCard({ paper }: { paper: PaperFiles }) {
+  const stageMeta = metaFor(paper.stage as never);
+  const sortedItems = useMemo(() => {
+    const order = new Map(KIND_ORDER.map((k, i) => [k, i] as const));
+    return [...paper.items].sort(
+      (a, b) => (order.get(a.kind) ?? 99) - (order.get(b.kind) ?? 99),
+    );
+  }, [paper.items]);
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 py-3 border-b border-border flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <code className="font-mono text-xs text-fg">{paper.paper_id}</code>
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 text-[11px] font-medium",
+                paper.stage === "published" && "bg-success/15 text-success",
+                paper.stage === "failed" && "bg-danger/15 text-danger",
+                paper.stage === "awaiting_review" && "bg-warning/15 text-warning",
+                !["published", "failed", "awaiting_review"].includes(paper.stage) &&
+                  "bg-accent-soft text-accent",
+              )}
+            >
+              {stageMeta?.label ?? paper.stage}
+            </span>
+          </div>
+          <p
+            className="mt-1 text-sm text-fg truncate"
+            title={paper.title || paper.filename}
+          >
+            {paper.title || paper.filename}
+          </p>
+        </div>
+        <Button asChild variant="ghost" size="sm">
+          <Link to={`/papers/${paper.paper_id}`} aria-label={`打开任务 ${paper.paper_id}`}>
+            详情
+            <ArrowRight size={14} />
+          </Link>
+        </Button>
+      </div>
+
+      <ul className="divide-y divide-border">
+        {sortedItems.length === 0 ? (
+          <li className="px-4 py-6 text-xs text-fg-muted">
+            尚无可下载产物（请到详情页查看流水线状态）。
+          </li>
+        ) : (
+          sortedItems.map((item) => (
+            <FileRow key={`${item.root}/${item.path}`} item={item} />
+          ))
+        )}
+      </ul>
+    </Card>
+  );
+}
+
+function FileRow({ item }: { item: PaperFileEntry }) {
+  const del = useDeletePath();
+  const reveal = useReveal();
+  const meta = KIND_LABELS[item.kind];
+  const Icon = meta.icon;
+  const sizeStr = formatSize(item.size);
+  const mtimeStr = formatTime(item.mtime);
+
+  return (
+    <li className="px-4 py-3 flex items-center gap-3 flex-wrap">
+      <Icon size={18} className="text-accent shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-fg-muted">{meta.label}</span>
+          <span className="font-mono text-xs text-fg truncate" title={item.filename}>
+            {item.filename}
+          </span>
+        </div>
+        <div className="text-[11px] text-fg-muted/80 mt-0.5">
+          {sizeStr}
+          {mtimeStr && ` · ${mtimeStr}`}
+        </div>
+      </div>
+      <div className="flex items-center gap-1">
+        <Button asChild variant="secondary" size="sm">
+          <a href={downloadUrl(item.root, item.path)} download={item.filename}>
+            <Download size={13} />
+            下载
+          </a>
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={reveal.isPending}
+          onClick={() => reveal.mutate({ root: item.root, path: item.path })}
+          title="在系统资源管理器中定位"
+        >
+          <ExternalLink size={13} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={del.isPending}
+          onClick={() => {
+            if (!confirm(`从磁盘删除 ${item.filename}？\n（任务记录会保留）`)) return;
+            del.mutate({ root: item.root, path: item.path });
+          }}
+          title="从磁盘删除"
+        >
+          <Trash2 size={13} className="text-danger" />
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+function formatSize(bytes: number | null): string {
+  if (bytes == null) return "—";
+  const units = ["B", "KB", "MB", "GB"];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i += 1;
+  }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function formatTime(iso: string | null): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
 }

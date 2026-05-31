@@ -289,6 +289,16 @@ def _generate_slides_plan(cfg, paper_id, plan_path):
     ]
     template_meta = json.loads(meta_path.read_text(encoding="utf-8"))
 
+    # Reviewer-supplied Cover values committed at upload time (P7). Best-
+    # effort — the planner just needs to know the placeholder names.
+    from papercast.server.review_service import load_start_meta
+    start_meta = load_start_meta(cfg, paper_id)
+    cover_meta: dict[str, str] = {}
+    if "reviewer" in start_meta:
+        cover_meta["REPORTER"] = start_meta["reviewer"]
+    if "major" in start_meta:
+        cover_meta["MAJOR"] = start_meta["major"]
+
     provider = _build_provider_for(cfg, "author")
     planner = AnthropicPlanner(provider, prompts_dir=Path(cfg.paths.prompts))
     plan = planner.plan(
@@ -299,6 +309,7 @@ def _generate_slides_plan(cfg, paper_id, plan_path):
         target_pages=tuple(cfg.slides.target_pages),
         target_duration_sec=int(sum(cfg.slides.target_duration_sec) / 2),
         report_date_placeholder="{{REPORT_DATE}}",
+        cover_meta=cover_meta or None,
     )
     write_slides_plan(plan, plan_path)
 

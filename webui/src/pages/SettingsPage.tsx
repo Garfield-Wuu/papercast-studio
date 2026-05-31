@@ -259,6 +259,29 @@ export function SettingsPage() {
           </Button>
         }
       >
+        <details className="rounded border border-border bg-surface-2/40 mb-3">
+          <summary className="px-3 py-2 cursor-pointer text-xs text-fg-muted select-none flex items-center justify-between">
+            <span>Reader / Author 角色说明（点击展开）</span>
+            <span className="text-fg-muted/60">？</span>
+          </summary>
+          <div className="px-3 pb-3 pt-1 text-xs text-fg-muted leading-relaxed space-y-2">
+            <p>
+              <strong className="text-fg">Reader（精读）</strong>：负责
+              <code className="px-1 mx-0.5 rounded bg-surface-2 font-mono">figures_split → read_done</code>
+              阶段，把 PDF 转为五段式 reading.json（literature_intro / research_question / methods / findings / discussion + key_terms + fact_cards）。输入：PDF 全文 + 图表 caption。一篇约
+              <span className="text-fg"> 8-15K tokens</span>，建议 max_tokens=8000。
+            </p>
+            <p>
+              <strong className="text-fg">Author（作者/讲解）</strong>：负责
+              <code className="px-1 mx-0.5 rounded bg-surface-2 font-mono">read_done → slides_done → script_done</code>
+              两个阶段。Planner 基于 reading + figures + 模板 schema 规划 13 页 PPT；Scripter 基于 slides_plan + reading 写 13 段口播讲稿（90-160 字、学术汇报口吻）。一篇约
+              <span className="text-fg"> 12-20K tokens</span>，建议 max_tokens=8000。
+            </p>
+            <p className="text-fg-muted/80">
+              两个角色可以用同一个 provider（如同一个 Anthropic key），也可以拆开 — 例如 Reader 用 Claude，Author 用 DeepSeek 控制成本。
+            </p>
+          </div>
+        </details>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {(["reader", "author"] as const).map((role) => (
             <LlmRoleCard

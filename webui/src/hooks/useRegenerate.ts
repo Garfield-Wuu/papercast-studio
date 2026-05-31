@@ -90,9 +90,18 @@ export function useRegeneratePreview() {
 
 interface ApproveArgs {
   paperId: string;
-  report_date: string;
+  /** Optional — falls back to start_meta.json if omitted. */
+  report_date?: string;
+  /** Optional — falls back to start_meta.json if omitted. */
   reviewer?: string;
   voice?: string;
+  /** Reviewer-specified TTS speed / video params. Composer reads these. */
+  overrides?: {
+    speed?: number;
+    resolution?: string;
+    fps?: number;
+    audio_bitrate?: string;
+  };
 }
 
 interface ApproveResponse {

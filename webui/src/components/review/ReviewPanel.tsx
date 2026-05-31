@@ -167,9 +167,8 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
   };
 
   const runApprove = async (args: {
-    report_date: string;
-    reviewer: string;
     voice?: string;
+    overrides?: Record<string, unknown>;
   }) => {
     await approve.mutateAsync({ paperId, ...args });
   };

@@ -4,12 +4,17 @@ Originally lived inline in `papercast.cli.main.approve`; extracted here
 so the FastAPI route can call the same code path without duplicating
 the FSM advance + .pptx re-assembly steps.
 
-Two main entry points:
+Three main entry points:
 
   apply_approval(cfg, db, paper_id, report_date, reviewer, voice)
     Writes approval.json, re-bakes the .pptx (if report_date given),
     advances the FSM to APPROVED. Pure I/O — no async. The caller is
     responsible for waking the JobOrchestrator afterwards.
+
+  apply_start_meta(cfg, paper_id, report_date, reviewer, major)
+    Persist Cover-slide values collected at upload time. Stored at
+    review/<pid>/start_meta.json so the planner runner (which uses
+    `cfg.llm.author`) can read them without going through the DB.
 
   regenerate(cfg, paper_id, target, items, feedback, merge)
     Drives a localized LLM rewrite of one part of one artifact. See the
@@ -71,6 +76,13 @@ def apply_approval(
     rdir.mkdir(parents=True, exist_ok=True)
     approval_path = rdir / "approval.json"
 
+    # Fall back to whatever the user committed at upload time.
+    start_meta = load_start_meta(cfg, paper_id)
+    if report_date is None:
+        report_date = start_meta.get("report_date")
+    if reviewer is None:
+        reviewer = start_meta.get("reviewer")
+
     existing: dict[str, Any] = {}
     if approval_path.exists():
         try:
@@ -106,12 +118,14 @@ def apply_approval(
 
 
 def _rebake_cover_date(cfg: Config, paper_id: str, report_date: str, rdir: Path) -> None:
-    """Replace `{{REPORT_DATE}}` in the assembled deck with the date.
+    """Re-assemble the deck with reviewer-supplied template_vars baked in.
 
-    The PPT assembler is idempotent — calling it twice with the same
-    plan produces byte-equivalent output, so we can call it freely
-    here without worrying about clobbering reviewer edits (those would
-    have changed slides_plan.json, which we re-read).
+    Despite the historical name, this now substitutes any cover-meta
+    values stored in start_meta.json (REPORTER / MAJOR) plus the freshly
+    committed REPORT_DATE. The PPT assembler is idempotent — calling it
+    twice with the same plan produces byte-equivalent output, so we can
+    call it freely without worrying about clobbering reviewer edits
+    (those would have changed slides_plan.json, which we re-read).
     """
     from papercast.author.render import (
         assemble_pptx, load_slides_plan, parse_script_md,
@@ -125,12 +139,86 @@ def _rebake_cover_date(cfg: Config, paper_id: str, report_date: str, rdir: Path)
     plan = load_slides_plan(plan_path)
     page_notes = parse_script_md(work / "script.md")
     pptx_out = work / f"{paper_id}.pptx"
+    template_vars = {"REPORT_DATE": report_date, **_load_start_meta_vars(cfg, paper_id)}
     assemble_pptx(
         plan, Path(cfg.paths.template), work / "figures", pptx_out,
         page_notes=page_notes or None,
-        template_vars={"REPORT_DATE": report_date},
+        template_vars=template_vars,
     )
     shutil.copy2(pptx_out, rdir / pptx_out.name)
+
+
+# ---------------------------------------------------------------------------
+# Start-time cover meta (P7)
+# ---------------------------------------------------------------------------
+
+
+_START_META_FILENAME = "start_meta.json"
+
+
+def _start_meta_path(cfg: Config, paper_id: str) -> Path:
+    return Path(cfg.paths.review) / paper_id / _START_META_FILENAME
+
+
+def apply_start_meta(
+    cfg: Config,
+    paper_id: str,
+    *,
+    report_date: str | None,
+    reviewer: str | None,
+    major: str | None,
+) -> dict[str, str]:
+    """Persist Cover-slide values committed when the user clicks 启动.
+
+    Stored at `review/<pid>/start_meta.json`. The planner runner reads
+    it (best-effort) so the LLM is told which placeholders to put on the
+    Cover. The approval step re-reads the same file when re-baking the
+    .pptx so REPORTER / MAJOR / REPORT_DATE all get substituted in one
+    go.
+
+    Returns the dict that was written (callers can echo it back).
+    """
+    payload: dict[str, str] = {}
+    if report_date:
+        payload["report_date"] = report_date.strip()
+    if reviewer:
+        payload["reviewer"] = reviewer.strip()
+    if major:
+        payload["major"] = major.strip()
+    if not payload:
+        return {}
+    path = _start_meta_path(cfg, paper_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8",
+    )
+    logger.info("wrote start_meta for %s: %s", paper_id, sorted(payload))
+    return payload
+
+
+def load_start_meta(cfg: Config, paper_id: str) -> dict[str, str]:
+    """Read start_meta.json if present; tolerant of missing file/keys."""
+    path = _start_meta_path(cfg, paper_id)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if isinstance(v, (str, int))}
+
+
+def _load_start_meta_vars(cfg: Config, paper_id: str) -> dict[str, str]:
+    """Convert start_meta.json into the {{NAME}} variable dict for assemble_pptx."""
+    meta = load_start_meta(cfg, paper_id)
+    out: dict[str, str] = {}
+    if "reviewer" in meta:
+        out["REPORTER"] = meta["reviewer"]
+    if "major" in meta:
+        out["MAJOR"] = meta["major"]
+    return out
 
 
 # ---------------------------------------------------------------------------

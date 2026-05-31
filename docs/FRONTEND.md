@@ -68,9 +68,8 @@ webui/
     ├── components/
     │   ├── ui/{Button,Card,Input,Tabs,Dialog,Checkbox,CodeEditor}.tsx
     │   ├── layout/Header.tsx
-    │   ├── files/FileTree.tsx
-    │   ├── papers/{PaperList,UploadDropzone}.tsx
-    │   └── pipeline/{PipelineProgress,EventLog}.tsx
+    │   ├── papers/{PaperList,UploadDropzone,StartPaperDialog}.tsx
+    │   └── pipeline/{PipelineProgress,EventLog,StageHistory}.tsx
     ├── pages/
     │   ├── PapersPage.tsx       # /
     │   ├── PaperDetailPage.tsx  # /papers/:paperId
@@ -182,11 +181,11 @@ and the panel collapses naturally on the next `paper` query refetch.
 
 ## Files / Voices / Settings (P6)
 
-### `/files` — runtime directory browser
-* Left rail lists all whitelisted roots (`inbox`, `archive`, `work`, `review`, `output`, `template`, `template_meta`, `prompts`, `logs`).
-* Center pane is a lazy file tree (`FileTree.tsx`) — directories load children on demand to keep first paint cheap.
-* Selecting a file exposes 下载 / 在新页面打开 / 在系统中打开 / 删除. `archive`, `templates`, `prompts` are read-only; `inbox`, `work`, `review`, `output`, `logs` accept deletes.
-* Drag-and-drop region uploads to `inbox/` regardless of the active root (matches the only whitelisted upload destination on the backend).
+### `/files` — per-paper deliverable view (P7)
+* One card per paper, listing the source PDF (from `archive/`), the assembled deck PPTX (from `review/<pid>/`), and the published video MP4 (from `output/`). Pipeline-internal artifacts are no longer browsable from this surface.
+* Each row has 下载 / 在系统中打开 / 删除. Delete only acts on `output/` and `archive/` — work/review/ are protected at the API layer.
+* Search filter on `paper_id` / 文件名 / 标题; stage chip lets the reviewer skim the queue.
+* Uploads happen on the 任务 page (`UploadDropzone`), not here — single source of truth for the upload flow.
 
 ### `/voices` — voice catalogue + clone
 * Top: list of locally-known voices from `config/voices.json`. 试听 expands an inline `<audio>` player driven by `POST /api/voice/preview` (returns mp3 bytes; we use a `Blob` URL with cleanup on unmount). 移除 deletes from the local catalogue only — the cloud voice on MiniMax survives.

@@ -41,10 +41,11 @@ OpenAPI / interactive docs:
 | POST  | `/api/papers/scan`                                     | Pick up PDFs already sitting in `inbox/` |
 | GET   | `/api/papers/{pid}`                                    | Paper detail + history + artifact catalog |
 | DELETE| `/api/papers/{pid}`                                    | Drop work/, review/, DB row (output mp4 preserved) |
-| POST  | `/api/papers/{pid}/start`                              | Kick off the JobOrchestrator |
+| POST  | `/api/papers/{pid}/start`                              | Kick off the JobOrchestrator. Optional body `{report_date, reviewer, major}` writes start_meta.json (P7) |
 | POST  | `/api/papers/{pid}/stop`                               | Cancel the running job |
 | POST  | `/api/papers/{pid}/retry`                              | Walk back from `failed` to last successful stage |
 | GET   | `/api/papers/{pid}/artifacts`                          | List artifact names that exist |
+| GET   | `/api/papers/{pid}/events`                             | Replay history as `{type, stage, ts, error?}` events (P7) |
 | GET   | `/api/papers/{pid}/artifact/{name}`                    | Stream binary OR return `{name, path, mtime, size, content}` for text |
 | PUT   | `/api/papers/{pid}/artifact/{name}`                    | Overwrite a text artifact (json validates first) |
 | POST  | `/api/papers/{pid}/artifact/{name}/upload`             | Replace a binary artifact (e.g. pptx) |
@@ -54,11 +55,12 @@ OpenAPI / interactive docs:
 | POST  | `/api/papers/{pid}/preview-render`                     | Render the assembled .pptx into PNG thumbnails (cached) |
 | POST  | `/api/papers/{pid}/figures/{figure_id}/rerun`          | Re-extract a single figure with the current caption detector |
 | POST  | `/api/papers/{pid}/figures/{figure_id}/replace`        | Overwrite figure PNG bytes with an uploaded image |
-| GET   | `/api/files/roots`                                     | Whitelisted root names |
-| GET   | `/api/files`                                           | List files under a root (query: `root`, `path`, `recurse`) |
-| GET   | `/api/files/download`                                  | Download a single file |
+| GET   | `/api/files/roots`                                     | Whitelisted root names (P7: only `output` + `archive`) |
+| GET   | `/api/files`                                           | List files under a root — only `output`/`archive` allowed (P7) |
+| GET   | `/api/files/papers`                                    | Per-paper deliverable view: source PDF + deck PPTX + video MP4 (P7) |
+| GET   | `/api/files/download`                                  | Download a single file (permissive — covers `work/figures` for the Review tab) |
 | POST  | `/api/files/upload`                                    | Upload to `inbox/` only |
-| DELETE| `/api/files`                                           | Delete a path under a deletable root |
+| DELETE| `/api/files`                                           | Delete a path under `output` or `archive` only (P7) |
 | POST  | `/api/files/reveal`                                    | Open file manager focused on the file (Win/macOS/Linux) |
 | GET   | `/api/voice/list`                                      | Locally-known cloned voices (`config/voices.json`) |
 | POST  | `/api/voice/clone`                                     | Multipart: audio sample + `voice_id` + optional `label`/`prompt_text` → MiniMax voice clone |

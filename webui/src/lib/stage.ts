@@ -46,6 +46,15 @@ export function metaFor(stage: Stage | null | undefined): StageMeta | null {
   return PIPELINE_STAGES.find((s) => s.id === stage) ?? null;
 }
 
+/** Linear stage order including the FAILED sink for code that wants
+ * to render every possible stage. PIPELINE_STAGES is the happy-path
+ * ordering; consumers handle FAILED as an off-path branch.
+ */
+export const ALL_STAGES: readonly Stage[] = [
+  ...PIPELINE_STAGES.map((s) => s.id),
+  "failed" as Stage,
+];
+
 /** True if `current` has reached or passed `target` in the linear flow. */
 export function hasReached(current: Stage | null | undefined, target: Stage): boolean {
   if (!current) return false;

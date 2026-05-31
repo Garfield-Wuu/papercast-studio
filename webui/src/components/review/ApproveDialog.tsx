@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
+import { ChevronDown, Loader2 } from "lucide-react";
 import { Dialog, DialogContent, DialogBody, DialogFooter } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import type { components } from "@/lib/api.gen";
+import { cn } from "@/lib/cn";
+
+type ConfigView = components["schemas"]["ConfigView"];
 
 interface Props {
   open: boolean;
@@ -10,68 +17,94 @@ interface Props {
   staleHint?: string | null;
   defaultVoice?: string;
   saving: boolean;
-  onSubmit: (args: { report_date: string; reviewer: string; voice?: string }) => Promise<void>;
+  onSubmit: (args: {
+    voice?: string;
+    overrides?: {
+      speed?: number;
+      resolution?: string;
+      fps?: number;
+      audio_bitrate?: string;
+    };
+  }) => Promise<void>;
 }
 
-const STORAGE_KEY_REVIEWER = "papercast.reviewer";
 const STORAGE_KEY_VOICE = "papercast.voice";
 
-/** Format today as `YYYY年M月D日`. */
-function defaultDate(): string {
-  const d = new Date();
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`;
-}
-
 /**
- * Approve dialog — collects report_date / reviewer / voice and submits.
- * Persists reviewer/voice to localStorage so subsequent papers don't
- * re-prompt for the same fields.
+ * Approve dialog (P7 revision).
+ *
+ *   Cover meta (date / reviewer / major) was already collected when
+ *   the user clicked 启动 — see StartPaperDialog. By the time the
+ *   reviewer reaches the approve step, the deck has been baked with
+ *   those values, so we don't ask again. Instead we collect:
+ *
+ *     - voice_id     (override config tts.voice for this paper)
+ *     - speed        (override config tts.speed)
+ *     - video params (resolution / fps / audio_bitrate, optional)
+ *
+ *   `voice` is sent verbatim; the rest go into `overrides` so the
+ *   composer applies them only for this paper. start_meta.json
+ *   provides the date/reviewer fallback inside `apply_approval`.
  */
 export function ApproveDialog({
   open,
   onOpenChange,
-  paperId: _paperId,
   staleHint,
   defaultVoice,
   saving,
   onSubmit,
 }: Props) {
-  const [reportDate, setReportDate] = useState(defaultDate());
-  const [reviewer, setReviewer] = useState(
-    () => localStorage.getItem(STORAGE_KEY_REVIEWER) ?? "",
-  );
+  const { data: cfg } = useQuery<ConfigView>({
+    queryKey: ["config"],
+    queryFn: () => api.get<ConfigView>("/config"),
+    staleTime: 60_000,
+  });
+  const ttsDefaults = cfg?.tts ?? {};
+  const videoDefaults = cfg?.video ?? {};
+  const cfgSpeed = Number(ttsDefaults.speed ?? 1.0);
+
   const [voice, setVoice] = useState(
     () => localStorage.getItem(STORAGE_KEY_VOICE) ?? defaultVoice ?? "",
   );
+  const [speed, setSpeed] = useState(cfgSpeed);
+  const [showVideo, setShowVideo] = useState(false);
+  const [resolution, setResolution] = useState(String(videoDefaults.resolution ?? "1920x1080"));
+  const [fps, setFps] = useState(Number(videoDefaults.fps ?? 30));
+  const [audioBitrate, setAudioBitrate] = useState(String(videoDefaults.audio_bitrate ?? "192k"));
   const [error, setError] = useState<string | null>(null);
-  const reviewerRequired = useMemo(() => reviewer.trim().length === 0, [reviewer]);
 
   useEffect(() => {
-    if (open) {
-      setReportDate(defaultDate());
-      setError(null);
-      // refresh defaults on each open
-      const r = localStorage.getItem(STORAGE_KEY_REVIEWER);
-      if (r) setReviewer(r);
-      const v = localStorage.getItem(STORAGE_KEY_VOICE) ?? defaultVoice;
-      if (v) setVoice(v);
-    }
-  }, [open, defaultVoice]);
+    if (!open) return;
+    setError(null);
+    const v = localStorage.getItem(STORAGE_KEY_VOICE) ?? defaultVoice;
+    if (v) setVoice(v);
+    setSpeed(cfgSpeed);
+    setResolution(String(videoDefaults.resolution ?? "1920x1080"));
+    setFps(Number(videoDefaults.fps ?? 30));
+    setAudioBitrate(String(videoDefaults.audio_bitrate ?? "192k"));
+  }, [open, defaultVoice, cfgSpeed, videoDefaults.resolution, videoDefaults.fps, videoDefaults.audio_bitrate]);
+
+  const speedClamped = useMemo(() => Math.min(2, Math.max(0.5, speed)), [speed]);
+  const speedChanged = Math.abs(speedClamped - cfgSpeed) > 0.001;
+  const videoChanged =
+    resolution !== String(videoDefaults.resolution ?? "1920x1080") ||
+    fps !== Number(videoDefaults.fps ?? 30) ||
+    audioBitrate !== String(videoDefaults.audio_bitrate ?? "192k");
 
   const handleSubmit = async () => {
-    if (reviewerRequired) {
-      setError("请填写审阅人姓名");
-      return;
-    }
     setError(null);
     try {
+      const overrides: Record<string, unknown> = {};
+      if (speedChanged) overrides.speed = speedClamped;
+      if (videoChanged) {
+        overrides.resolution = resolution.trim();
+        overrides.fps = fps;
+        overrides.audio_bitrate = audioBitrate.trim();
+      }
       await onSubmit({
-        report_date: reportDate.trim(),
-        reviewer: reviewer.trim(),
         voice: voice.trim() || undefined,
+        overrides: Object.keys(overrides).length ? overrides : undefined,
       });
-      // Persist for next time on success.
-      localStorage.setItem(STORAGE_KEY_REVIEWER, reviewer.trim());
       if (voice.trim()) localStorage.setItem(STORAGE_KEY_VOICE, voice.trim());
       onOpenChange(false);
     } catch (e) {
@@ -84,7 +117,7 @@ export function ApproveDialog({
       <DialogContent
         size="md"
         title="审批通过"
-        description="确认后流水线会进入 TTS 阶段；封面日期会替换 {{REPORT_DATE}} 占位符。"
+        description="确认后流水线进入 TTS 阶段。汇报日期 / 汇报人 / 专业来自启动时的填写，无需在此重复。"
       >
         <DialogBody className="space-y-4">
           {staleHint && (
@@ -92,27 +125,82 @@ export function ApproveDialog({
               {staleHint}
             </div>
           )}
-          <Field label="报告日期" hint="任意格式都会原样写入封面，例如：2026年5月17日">
-            <Input
-              value={reportDate}
-              onChange={(e) => setReportDate(e.target.value)}
-              placeholder="2026年5月17日"
-            />
-          </Field>
-          <Field label="审阅人姓名" required>
-            <Input
-              value={reviewer}
-              onChange={(e) => setReviewer(e.target.value)}
-              placeholder="例如：Wu"
-            />
-          </Field>
-          <Field label="语音 voice_id" hint="留空则使用配置默认值">
+
+          <Field label="语音 voice_id" hint="留空使用配置默认值；可使用系统音色或克隆音色">
             <Input
               value={voice}
               onChange={(e) => setVoice(e.target.value)}
-              placeholder="如：xhsgarfield1"
+              placeholder={defaultVoice ?? "如：xhsgarfield1"}
+              className="font-mono text-xs"
             />
           </Field>
+
+          <Field
+            label={`语速  ${speedClamped.toFixed(2)}x`}
+            hint={speedChanged ? `配置默认 ${cfgSpeed.toFixed(2)}x；本次任务覆盖` : "等于配置默认值，不会写入 overrides"}
+          >
+            <input
+              type="range"
+              min={0.5}
+              max={2}
+              step={0.05}
+              value={speedClamped}
+              onChange={(e) => setSpeed(Number(e.target.value))}
+              className="w-full accent-accent"
+              aria-label="语速"
+            />
+          </Field>
+
+          <details
+            open={showVideo}
+            onToggle={(e) => setShowVideo((e.target as HTMLDetailsElement).open)}
+            className="rounded border border-border bg-surface-2/50"
+          >
+            <summary className="px-3 py-2 text-xs text-fg cursor-pointer flex items-center justify-between select-none">
+              <span>视频参数（默认沿用配置）</span>
+              <ChevronDown
+                size={14}
+                className={cn("transition-transform", showVideo && "rotate-180")}
+              />
+            </summary>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3 pt-0">
+              <Field label="分辨率">
+                <Input
+                  value={resolution}
+                  onChange={(e) => setResolution(e.target.value)}
+                  list="approve-resolution"
+                />
+                <datalist id="approve-resolution">
+                  <option value="1920x1080" />
+                  <option value="1280x720" />
+                  <option value="3840x2160" />
+                </datalist>
+              </Field>
+              <Field label="FPS">
+                <Input
+                  type="number"
+                  min={15}
+                  max={60}
+                  step={1}
+                  value={fps}
+                  onChange={(e) => setFps(Number(e.target.value))}
+                />
+              </Field>
+              <Field label="音频码率">
+                <Input
+                  value={audioBitrate}
+                  onChange={(e) => setAudioBitrate(e.target.value)}
+                  list="approve-bitrate"
+                />
+                <datalist id="approve-bitrate">
+                  <option value="128k" />
+                  <option value="192k" />
+                  <option value="256k" />
+                  <option value="320k" />
+                </datalist>
+              </Field>
+            </div>
+          </details>
         </DialogBody>
         <DialogFooter>
           {error && (
@@ -120,15 +208,12 @@ export function ApproveDialog({
               {error}
             </span>
           )}
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
             取消
           </Button>
-          <Button
-            variant="primary"
-            onClick={handleSubmit}
-            disabled={saving || reviewerRequired}
-          >
-            {saving ? "提交中…" : "通过并启动 TTS"}
+          <Button variant="primary" onClick={handleSubmit} disabled={saving}>
+            {saving && <Loader2 size={14} className="animate-spin" />}
+            通过并启动 TTS
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -139,20 +224,15 @@ export function ApproveDialog({
 function Field({
   label,
   hint,
-  required,
   children,
 }: {
   label: string;
   hint?: string;
-  required?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <label className="block space-y-1.5">
-      <span className="text-sm text-fg flex items-center gap-1">
-        {label}
-        {required && <span className="text-danger">*</span>}
-      </span>
+      <span className="text-sm text-fg">{label}</span>
       {children}
       {hint && <span className="block text-xs text-fg-muted">{hint}</span>}
     </label>

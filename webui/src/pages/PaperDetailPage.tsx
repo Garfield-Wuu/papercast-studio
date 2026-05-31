@@ -10,6 +10,7 @@ import { usePaperEvents } from "@/hooks/usePaperEvents";
 import { Button } from "@/components/ui/Button";
 import { PipelineProgress } from "@/components/pipeline/PipelineProgress";
 import { EventLog } from "@/components/pipeline/EventLog";
+import { StageHistory } from "@/components/pipeline/StageHistory";
 import { metaFor } from "@/lib/stage";
 import { ReviewPanel } from "@/components/review/ReviewPanel";
 import { useQuery } from "@tanstack/react-query";
@@ -18,6 +19,18 @@ import type { components } from "@/lib/api.gen";
 
 const TERMINAL_STAGES = new Set(["published", "failed"]);
 
+/**
+ * Detail page (P7 reorder): the live progress sits up top so the user
+ * sees pipeline state at a glance without scrolling. The artifact list
+ * was removed — those live on the Files page now.
+ *
+ *   header (title + actions)
+ *   stage banner (failed / awaiting_review / published)
+ *   PipelineProgress      ← moved up; first thing after the banner
+ *   ReviewPanel           ← only when awaiting_review
+ *   EventLog              ← live + persisted across sessions
+ *   StageHistory          ← timeline with per-step durations
+ */
 export function PaperDetailPage() {
   const { paperId } = useParams<{ paperId: string }>();
   const { data, isLoading, error } = usePaperDetail(paperId);
@@ -64,7 +77,7 @@ export function PaperDetailPage() {
   const canRetry = isFailed;
 
   return (
-    <div className="mx-auto max-w-screen-2xl px-5 py-8 space-y-8">
+    <div className="mx-auto max-w-screen-2xl px-5 py-8 space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-2">
@@ -117,9 +130,11 @@ export function PaperDetailPage() {
       </div>
 
       {/* Stage banner */}
-      {isFailed ? (
+      {isFailed && (
         <div className="rounded-lg border border-danger/40 bg-danger/10 p-4 text-sm">
-          <div className="font-medium text-danger">流水线在「{stageMeta?.label ?? data.stage}」阶段失败。</div>
+          <div className="font-medium text-danger">
+            流水线在「{stageMeta?.label ?? data.stage}」阶段失败。
+          </div>
           {(data.errors ?? []).length > 0 && (
             <ul className="mt-1.5 list-disc pl-5 text-fg-muted text-xs space-y-0.5">
               {(data.errors ?? []).map((e, i) => (
@@ -128,20 +143,17 @@ export function PaperDetailPage() {
             </ul>
           )}
         </div>
-      ) : data.stage === "awaiting_review" ? (
-        <ReviewPanel paperId={paperId} defaultVoice={defaultVoice} />
-      ) : data.stage === "published" ? (
+      )}
+      {data.stage === "published" && (
         <div className="rounded-lg border border-success/40 bg-success/10 p-4 text-sm">
           <div className="font-medium text-success">已发布</div>
           {data.output_path && (
-            <p className="mt-1 text-fg-muted text-xs font-mono">
-              {data.output_path}
-            </p>
+            <p className="mt-1 text-fg-muted text-xs font-mono">{data.output_path}</p>
           )}
         </div>
-      ) : null}
+      )}
 
-      {/* Pipeline */}
+      {/* Pipeline progress — moved up so the user sees it first. */}
       <section className="space-y-3">
         <h2 className="text-base text-fg-muted">流水线进度</h2>
         <div className="rounded-lg border border-border bg-surface p-5">
@@ -149,44 +161,24 @@ export function PaperDetailPage() {
         </div>
       </section>
 
+      {/* Review panel only when awaiting */}
+      {data.stage === "awaiting_review" && (
+        <ReviewPanel paperId={paperId} defaultVoice={defaultVoice} />
+      )}
+
       {/* Event log */}
       <section className="space-y-3">
         <h2 className="text-base text-fg-muted">事件流</h2>
         <EventLog events={events} connected={connected} />
       </section>
 
-      {/* History + artifacts */}
-      <section className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <div className="rounded-lg border border-border bg-surface p-5">
-          <h3 className="text-sm font-medium text-fg-muted mb-3">阶段历史</h3>
-          <ol className="space-y-2 text-xs font-mono">
-            {(data.history ?? []).map((h, i) => (
-              <li key={i} className="flex items-baseline gap-3">
-                <span className="text-fg-muted/70">{i + 1}.</span>
-                <span className="w-32 text-fg">{metaFor(h.stage)?.label ?? h.stage}</span>
-                <span className="text-fg-muted/70">{new Date(h.ts).toLocaleString("zh-CN")}</span>
-              </li>
-            ))}
-          </ol>
-        </div>
-
-        <div className="rounded-lg border border-border bg-surface p-5">
-          <h3 className="text-sm font-medium text-fg-muted mb-3">已生成产物</h3>
-          {(data.artifacts ?? []).length === 0 ? (
-            <p className="text-xs text-fg-muted">尚未生成任何产物。</p>
-          ) : (
-            <ul className="grid grid-cols-2 gap-1.5 text-xs">
-              {(data.artifacts ?? []).map((name) => (
-                <li
-                  key={name}
-                  className="px-2 py-1.5 rounded bg-surface-2 font-mono text-fg"
-                >
-                  {name}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+      {/* History */}
+      <section className="space-y-3">
+        <StageHistory
+          history={data.history ?? []}
+          currentStage={data.stage}
+          isFailed={isFailed}
+        />
       </section>
     </div>
   );

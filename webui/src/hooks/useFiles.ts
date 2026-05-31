@@ -2,48 +2,42 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, apiUrl } from "@/lib/api";
 
 /**
- * Hooks for the file-management page.
+ * Hooks for the per-paper Files page (P7).
  *
- *   /api/files/roots
- *   /api/files?root=&path=&recurse=
- *   /api/files/upload
- *   /api/files (DELETE)
- *   /api/files/reveal
- *   /api/files/download (built via apiUrl, not via fetch)
+ *   GET    /api/files/papers     → PaperFiles[]   (one row per paper)
+ *   DELETE /api/files            → drop a single deliverable
+ *   POST   /api/files/reveal     → open in OS file manager
+ *   GET    /api/files/download   → built via apiUrl, not via fetch
+ *
+ * The pre-P7 directory-tree view is gone — the user only manages
+ * deliverables (source PDF / deck PPTX / video MP4), and we render
+ * those as cards instead of a tree.
  */
 
-export interface FileNode {
-  name: string;
-  rel_path: string;
-  is_dir: boolean;
+export interface PaperFileEntry {
+  kind: "source_pdf" | "deck_pptx" | "video_mp4";
+  root: string;
+  path: string;
+  filename: string;
   size: number | null;
   mtime: string | null;
-  children?: FileNode[] | null;
 }
 
-export interface TreeResponse {
-  root: string;
-  base_path: string;
-  nodes: FileNode[];
+export interface PaperFiles {
+  paper_id: string;
+  filename: string;
+  title: string | null;
+  stage: string;
+  ingested_at: string;
+  items: PaperFileEntry[];
 }
 
-export function useRoots() {
-  return useQuery<{ roots: string[] }>({
-    queryKey: ["files", "roots"],
-    queryFn: () => api.get("/files/roots"),
-    staleTime: 5 * 60_000, // doesn't change at runtime
-  });
-}
-
-export function useFileTree(root: string | undefined, path: string = "") {
-  return useQuery<TreeResponse>({
-    queryKey: ["files", "tree", root, path],
-    queryFn: () =>
-      api.get<TreeResponse>(
-        `/files?root=${encodeURIComponent(root!)}&path=${encodeURIComponent(path)}`,
-      ),
-    enabled: Boolean(root),
-    refetchOnWindowFocus: false,
+export function usePaperFiles() {
+  return useQuery<PaperFiles[]>({
+    queryKey: ["files", "papers"],
+    queryFn: () => api.get<PaperFiles[]>("/files/papers"),
+    staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 }
 
@@ -51,25 +45,6 @@ export function downloadUrl(root: string, path: string): string {
   return apiUrl(
     `/files/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
   );
-}
-
-interface UploadArgs {
-  root: string;
-  file: File;
-}
-
-export function useUploadToRoot() {
-  const qc = useQueryClient();
-  return useMutation<unknown, Error, UploadArgs>({
-    mutationFn: ({ root, file }) =>
-      api.upload(`/files/upload?root=${encodeURIComponent(root)}`, file),
-    onSuccess: (_, { root }) => {
-      qc.invalidateQueries({ queryKey: ["files", "tree", root] });
-      // The papers list reads inbox indirectly via /api/papers/scan;
-      // we don't auto-scan to avoid surprising the user, but if the
-      // upload was to inbox we want the "Files" page tree to update.
-    },
-  });
 }
 
 interface DeleteArgs {
@@ -80,10 +55,9 @@ interface DeleteArgs {
 export function useDeletePath() {
   const qc = useQueryClient();
   return useMutation<unknown, Error, DeleteArgs>({
-    mutationFn: ({ root, path }) =>
-      api.del("/files", { root, path }),
-    onSuccess: (_, { root }) => {
-      qc.invalidateQueries({ queryKey: ["files", "tree", root] });
+    mutationFn: ({ root, path }) => api.del("/files", { root, path }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["files", "papers"] });
     },
   });
 }
