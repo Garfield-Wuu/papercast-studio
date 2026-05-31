@@ -109,7 +109,28 @@ def extract_figures(
     parsed: ParsedDocument,
     out_dir: Path,
     dpi: int = 200,
+    *,
+    mode: str = "text_blocks",
 ) -> list[FigureRecord]:
+    """Extract figure/table crops, choosing between two strategies.
+
+    Modes:
+      - "text_blocks" (default, legacy): bounds the crop with the
+        nearest text block above/below the caption, then widens
+        horizontally with `_expand_horizontal_to_words`. Has been in
+        production since P1.
+      - "visual_cluster" (Method D, P9): anchors each caption to the
+        nearest matching cluster of embedded images / vector drawings
+        and uses the cluster's bbox directly. Falls back to the
+        text_blocks path when no candidate cluster scores high enough.
+
+    The fallback inside "visual_cluster" makes regression on any single
+    paper near-impossible — worst case, it produces the same crop as
+    legacy. The eval script `scripts/eval_figures.py` produces side-by-
+    side overlays to compare.
+    """
+    if mode not in ("text_blocks", "visual_cluster"):
+        raise ValueError(f"unknown mode: {mode!r}")
     pdf_path = Path(pdf_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -123,10 +144,14 @@ def extract_figures(
             parsed_page = parsed.pages[page_idx]
             captions = _find_captions(parsed_page)
             for cap in captions:
-                if cap.kind == "table":
-                    region = _region_below_caption(parsed_page, cap, page)
-                else:
-                    region = _region_above_caption(parsed_page, cap, page)
+                region: fitz.Rect | None = None
+                if mode == "visual_cluster":
+                    region = _match_via_visual_cluster(page, cap)
+                if region is None:
+                    if cap.kind == "table":
+                        region = _region_below_caption(parsed_page, cap, page)
+                    else:
+                        region = _region_above_caption(parsed_page, cap, page)
                 if region is None:
                     continue
                 fid = _build_id(cap, used_ids)
@@ -500,6 +525,79 @@ def _render_crop(page: fitz.Page, rect: fitz.Rect, zoom: float, out_path: Path) 
     matrix = fitz.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=matrix, clip=rect, alpha=False)
     pix.save(str(out_path))
+
+
+# ---------------------------------------------------------------------------
+# Method D: caption ↔ visual cluster matching
+# ---------------------------------------------------------------------------
+
+
+# Minimum score for a cluster/image candidate to win over the text-block
+# fallback. 0.55 = roughly "fit ≥ 0.7 OR (fit ≥ 0.5 AND nearby)". Tuned
+# loosely; eval script can sweep.
+_VISUAL_SCORE_FLOOR = 0.55
+
+# Final padding around the matched region. Method D doc recommends 6pt;
+# we trim the caller's bbox to stay inside the page minus 5pt margin.
+_VISUAL_PAD_PT = 6.0
+
+
+def _match_via_visual_cluster(page: fitz.Page, cap: _Caption) -> fitz.Rect | None:
+    """Score each embedded image + drawing cluster on the page against the
+    caption's expected direction. Return the best-scoring candidate's
+    refined bbox (with padding + page clamp), or None if nothing wins.
+
+    Direction:
+      - figure caption → search up (figure sits above caption)
+      - table caption  → search down (table sits below caption)
+    """
+    from ._clusters import (
+        DEFAULT_PARAMS,
+        cluster_drawings,
+        find_image_rects,
+        score_match,
+    )
+
+    direction = "up" if cap.kind == "figure" else "down"
+    page_height = page.rect.height
+
+    images = find_image_rects(page, DEFAULT_PARAMS)
+    clusters = cluster_drawings(page, DEFAULT_PARAMS)
+
+    best_score = 0.0
+    best_rect: fitz.Rect | None = None
+
+    for rect in images:
+        score, refined = score_match(cap.bbox, rect, direction, page_height)
+        if score > best_score and refined is not None:
+            best_score = score
+            best_rect = refined
+    for cluster in clusters:
+        score, refined = score_match(cap.bbox, cluster, direction, page_height)
+        if score > best_score and refined is not None:
+            best_score = score
+            best_rect = refined
+
+    if best_rect is None or best_score < _VISUAL_SCORE_FLOOR:
+        return None
+
+    return _pad_and_clamp(best_rect, page.rect)
+
+
+def _pad_and_clamp(rect: fitz.Rect, page_rect: fitz.Rect) -> fitz.Rect:
+    """Pad `rect` by `_VISUAL_PAD_PT` and clamp to page bounds (5pt margin).
+
+    Padding makes the crop a hair more generous than the tight cluster
+    bbox so figure annotations on the edge aren't sliced off; clamping
+    keeps us inside the page even when padding would push us out.
+    """
+    x0 = max(page_rect.x0 + 5, rect.x0 - _VISUAL_PAD_PT)
+    y0 = max(page_rect.y0 + 5, rect.y0 - _VISUAL_PAD_PT)
+    x1 = min(page_rect.x1 - 5, rect.x1 + _VISUAL_PAD_PT)
+    y1 = min(page_rect.y1 - 5, rect.y1 + _VISUAL_PAD_PT)
+    if x1 - x0 < 30 or y1 - y0 < 30:
+        return rect  # padding collapsed it; let the caller use the raw rect
+    return fitz.Rect(x0, y0, x1, y1)
 
 
 # Reference exposed for tests and downstream callers that want to walk

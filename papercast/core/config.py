@@ -111,6 +111,15 @@ class Slides(BaseModel):
     hard_min_pages: int = 10
     speaking_rate_cpm: int = 220
     target_duration_sec: tuple[int, int] = (420, 540)
+    # P9: choose between the legacy "text_blocks" extractor and the
+    # Method D "visual_cluster" extractor (caption-anchored cluster of
+    # embedded images + vector drawings). visual_cluster falls back to
+    # text_blocks when no candidate scores high enough, so flipping the
+    # default is safe even when a paper has a layout that the new
+    # method handles poorly. Default switched to visual_cluster after
+    # eyeball comparison on 3 real papers showed strictly better or
+    # equal bboxes (see reports/eval_figures.md).
+    figure_extractor: str = "visual_cluster"
 
 
 class ReviewNotify(BaseModel):

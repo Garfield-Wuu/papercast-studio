@@ -9,15 +9,18 @@ Color key in overlays:
 
 | paper_id | pages | text_blocks | visual_cluster | notes |
 |---|---|---|---|---|
-| `340c1ecb2a` | 6 | 0 fig / 0 tab | 0 fig / 0 tab | visual_cluster: extract_figures has no mode kwarg yet |
-| `448eb6cd01` | 15 | 8 fig / 1 tab | 0 fig / 0 tab | visual_cluster: extract_figures has no mode kwarg yet |
-| `a9842a77cb` | 23 | 11 fig / 0 tab | 0 fig / 0 tab | visual_cluster: extract_figures has no mode kwarg yet |
+| `340c1ecb2a` | 6 | 0 fig / 0 tab | 0 fig / 2 tab | — |
+| `448eb6cd01` | 15 | 8 fig / 1 tab | 8 fig / 2 tab | — |
+| `a9842a77cb` | 23 | 11 fig / 0 tab | 11 fig / 0 tab | — |
 
 ## Per-paper detail
 
 ### `340c1ecb2a`  (6 pages, source: `work\340c1ecb2a\source.pdf`)
 - **text_blocks**: 0 record(s)
-- **visual_cluster**: 0 record(s) · ⚠️ extract_figures has no mode kwarg yet
+- **visual_cluster**: 2 record(s)
+  - `tab_1` p3  526×154pt  · Table 1
+  - `tab_2` p4  260×163pt  · Table 2
+- overlays: `reports/eval_figures/340c1ecb2a/_overlay_p03.png`, `reports/eval_figures/340c1ecb2a/_overlay_p04.png`
 
 ### `448eb6cd01`  (15 pages, source: `work\448eb6cd01\source.pdf`)
 - **text_blocks**: 9 record(s)
@@ -30,7 +33,17 @@ Color key in overlays:
   - `fig_6` p9  213×120pt  · Fig. 6
   - `fig_7` p9  267×168pt  · Fig. 7
   - `fig_8` p11  263×193pt  · Fig. 8
-- **visual_cluster**: 0 record(s) · ⚠️ extract_figures has no mode kwarg yet
+- **visual_cluster**: 10 record(s)
+  - `fig_1` p2  222×185pt  · Fig. 1
+  - `fig_2` p4  470×262pt  · Fig. 2
+  - `fig_3` p4  430×137pt  · Fig. 3
+  - `fig_4` p8  472×134pt  · Fig. 4
+  - `tab_5` p8  263×109pt  · Table 5
+  - `fig_5` p9  477×150pt  · Fig. 5
+  - `fig_6` p9  106×106pt  · Fig. 6
+  - `fig_7` p9  206×135pt  · Fig. 7
+  - `tab_7` p11  233×177pt  · Table 7
+  - `fig_8` p11  233×177pt  · Fig. 8
 - overlays: `reports/eval_figures/448eb6cd01/_overlay_p02.png`, `reports/eval_figures/448eb6cd01/_overlay_p04.png`, `reports/eval_figures/448eb6cd01/_overlay_p08.png`, `reports/eval_figures/448eb6cd01/_overlay_p09.png`, `reports/eval_figures/448eb6cd01/_overlay_p11.png`
 
 ### `a9842a77cb`  (23 pages, source: `work\a9842a77cb\source.pdf`)
@@ -46,5 +59,16 @@ Color key in overlays:
   - `fig_9` p16  549×192pt  · Figure 9
   - `fig_10` p16  179×149pt  · Figure 10
   - `fig_11` p18  184×560pt  · Figure 11
-- **visual_cluster**: 0 record(s) · ⚠️ extract_figures has no mode kwarg yet
+- **visual_cluster**: 11 record(s)
+  - `fig_1` p6  480×350pt  · Figure 1
+  - `fig_2` p11  246×162pt  · Figure 2
+  - `fig_3` p11  486×288pt  · Figure 3
+  - `fig_4` p13  480×182pt  · Figure 4
+  - `fig_5` p14  432×239pt  · Figure 5
+  - `fig_6` p14  432×115pt  · Figure 6
+  - `fig_7` p14  372×237pt  · Figure 7
+  - `fig_8` p15  246×383pt  · Figure 8
+  - `fig_9` p16  480×184pt  · Figure 9
+  - `fig_10` p16  247×122pt  · Figure 10
+  - `fig_11` p18  372×547pt  · Figure 11
 - overlays: `reports/eval_figures/a9842a77cb/_overlay_p06.png`, `reports/eval_figures/a9842a77cb/_overlay_p11.png`, `reports/eval_figures/a9842a77cb/_overlay_p13.png`, `reports/eval_figures/a9842a77cb/_overlay_p14.png`, `reports/eval_figures/a9842a77cb/_overlay_p15.png` (+2 more)

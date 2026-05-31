@@ -37,15 +37,18 @@ def page_with_two_clusters(tmp_path):
         y=360  |  └────────────────┘
 
     Expected: cluster_drawings yields 2 clusters, A above B.
+
+    Each band contains a few rectangles big enough to clear the default
+    `drawing_min_path_area=100pt²` filter; thin grid lines (area ~25pt²)
+    are filtered out as decorative.
     """
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
-    # Band A — fine grid with many short rules
-    for x in range(80, 540, 12):
-        page.draw_line((x, 60), (x, 110), color=(0, 0, 0), width=0.5)
-    for y in range(60, 110, 8):
-        page.draw_line((80, y), (540, y), color=(0, 0, 0), width=0.5)
-    # Band B — a single bigger rect (still many strokes from rendering)
+    # Band A — three boxes side by side
+    page.draw_rect(fitz.Rect(80, 60, 220, 110), color=(0, 0, 0), width=1)
+    page.draw_rect(fitz.Rect(240, 60, 380, 110), color=(0, 0, 0), width=1)
+    page.draw_rect(fitz.Rect(400, 60, 540, 110), color=(0, 0, 0), width=1)
+    # Band B — one wider box, well-separated (gap >> 30pt)
     page.draw_rect(fitz.Rect(120, 305, 480, 355), color=(0, 0, 0), width=1)
     out = tmp_path / "two_clusters.pdf"
     doc.save(str(out))

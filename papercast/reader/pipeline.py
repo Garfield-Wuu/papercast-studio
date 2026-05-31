@@ -52,7 +52,8 @@ def run_figures(cfg: Config, paper_id: str) -> None:
     parsed = _load_parsed(parsed_path)
     fig_dir = work / "figures"
     fig_dir.mkdir(exist_ok=True)
-    records = extract_figures(src, parsed, fig_dir, dpi=200)
+    mode = getattr(cfg.slides, "figure_extractor", "text_blocks")
+    records = extract_figures(src, parsed, fig_dir, dpi=200, mode=mode)
     first_page = extract_first_page(src, fig_dir / "paper_first_page.png", dpi=200)
     records.append(first_page)
     write_figures_meta(records, fig_dir / "figures.json")
