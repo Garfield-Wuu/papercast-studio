@@ -61,3 +61,5 @@ webui/node_modules/
 webui/dist/
 webui/.pnpm-approved-builds
 papercast/server/static/
+webui/tsconfig.tsbuildinfo
+webui/.vite/
