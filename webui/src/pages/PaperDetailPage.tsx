@@ -8,7 +8,7 @@ import {
 } from "@/hooks/usePapers";
 import { usePaperEvents } from "@/hooks/usePaperEvents";
 import { Button } from "@/components/ui/Button";
-import { PipelineProgress } from "@/components/pipeline/PipelineProgress";
+import { PipelineProgress, PipelineProgressDetail } from "@/components/pipeline/PipelineProgress";
 import { EventLog } from "@/components/pipeline/EventLog";
 import { StageHistory } from "@/components/pipeline/StageHistory";
 import { metaFor } from "@/lib/stage";
@@ -158,6 +158,14 @@ export function PaperDetailPage() {
         <h2 className="text-base text-fg-muted">流水线进度</h2>
         <div className="rounded-lg border border-border bg-surface p-5">
           <PipelineProgress current={data.stage} isFailed={isFailed} />
+          <details className="mt-4 pt-4 border-t border-border/60">
+            <summary className="cursor-pointer text-xs text-fg-muted hover:text-fg select-none">
+              展开完整 12 阶段
+            </summary>
+            <div className="mt-3">
+              <PipelineProgressDetail current={data.stage} isFailed={isFailed} />
+            </div>
+          </details>
         </div>
       </section>
 

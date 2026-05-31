@@ -105,21 +105,21 @@ export function FilesPage() {
           icon={Film}
           value={stats.videoCount}
           label="视频成品"
-          hint="output/ 目录"
+          hint="已发布的 mp4"
           tone="success"
         />
         <StatItem
           icon={Presentation}
           value={stats.pptxCount}
           label="演示 PPT"
-          hint="review/ 目录"
+          hint="可下载并本地修改"
           tone="accent"
         />
         <StatItem
           icon={HardDrive}
           value={formatBytes(stats.totalBytes)}
           label="累计存储"
-          hint="包含原文 / PPT / 视频"
+          hint="原文 / PPT / 视频合计"
         />
       </StatRow>
 

@@ -66,6 +66,7 @@ OpenAPI / interactive docs:
 | POST  | `/api/voice/clone`                                     | Multipart: audio sample (mp3/wav/m4a/ogg/webm) + `voice_id` + optional `label`/`prompt_text` → MiniMax voice clone. webm uploads (browser MediaRecorder) are auto-transcoded to mp3 via ffmpeg before forwarding (P8) |
 | POST  | `/api/voice/preview`                                   | JSON `{voice_id, text, speed?, model?}` → mp3 bytes for `<audio>` |
 | POST  | `/api/voice/script`                                    | JSON `{keywords: list[str]}` → `{text, char_count}`, ~1000-char academic-talk sample drafted by Author LLM for clone wizard (P8) |
+| POST  | `/api/voice/{voice_id}/favorite`                       | JSON `{is_favorite, label?, source?}` → toggle favorite. System voices created on first favorite; cloned voices flag-flipped. Used by Settings → 音色 dropdown (P10) |
 | DELETE| `/api/voice/{voice_id}`                                | Remove from local catalogue (cloud voice survives) |
 | WS    | `/ws/papers/{pid}`                                     | Subscribe to events for one paper |
 | WS    | `/ws/global`                                           | Subscribe to every event |

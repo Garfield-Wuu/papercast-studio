@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Cpu, Server, Mic, Key, Save, Undo2, Eye, EyeOff, CheckCircle2, XCircle, Film, Loader2, ShieldCheck, FolderTree, Package } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Cpu, Server, Mic, Key, Save, Undo2, Eye, EyeOff, CheckCircle2, XCircle, Film, Loader2, ShieldCheck, Package, Star } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { StatItem, StatRow } from "@/components/ui/StatItem";
 import { useConfig, useUpdateConfig, useValidateConfig, type ConfigView, type ConfigUpdate } from "@/hooks/useConfig";
+import { useVoices } from "@/hooks/useVoices";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { components } from "@/lib/api.gen";
@@ -151,6 +153,11 @@ export function SettingsPage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [validateResult, setValidateResult] = useState<Record<string, { ok: boolean; detail?: string }> | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
+  const { data: voices } = useVoices();
+  const favoriteVoices = useMemo(
+    () => (voices ?? []).filter((v) => v.is_favorite),
+    [voices],
+  );
 
   // Re-seed draft whenever the server-side config loads or refreshes.
   useEffect(() => {
@@ -238,7 +245,7 @@ export function SettingsPage() {
               icon={Cpu}
               value={`${llmKeysSet} / 2`}
               label="LLM 角色已配置"
-              hint="Reader + Author"
+              hint="精读 + 撰稿"
               tone={llmKeysSet === 2 ? "success" : "warning"}
             />
             <StatItem
@@ -252,7 +259,7 @@ export function SettingsPage() {
               icon={ShieldCheck}
               value={fingerprintCount}
               label="密钥已录入"
-              hint="存于 config/secrets.env"
+              hint="本地加密存放"
               tone={fingerprintCount > 0 ? "neutral" : "warning"}
             />
             <StatItem
@@ -314,26 +321,6 @@ export function SettingsPage() {
               ))}
             </ul>
           </div>
-
-          {/* Workspace paths */}
-          {Object.keys(cfg.paths).length > 0 && (
-            <div>
-              <div className="text-xs text-fg-muted mb-1.5 flex items-center gap-1.5">
-                <FolderTree size={12} />
-                工作目录
-              </div>
-              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-y-1 gap-x-6 text-xs">
-                {Object.entries(cfg.paths).map(([k, v]) => (
-                  <li key={k} className="flex items-baseline gap-2 min-w-0">
-                    <span className="text-fg-muted shrink-0 w-20 font-mono">{k}</span>
-                    <span className="text-fg font-mono truncate" title={String(v)}>
-                      {String(v)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
         </div>
       </Section>
 
@@ -402,26 +389,79 @@ export function SettingsPage() {
       {/* TTS */}
       <Section icon={<Mic size={16} />} title="TTS 默认设置">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Field label="默认 voice_id">
-            <Input
-              value={draft.tts.voice}
-              onChange={(e) => setDraft({ ...draft, tts: { ...draft.tts, voice: e.target.value } })}
-              placeholder="例如 xhsgarfield1 或 female_warm"
-            />
+          <Field
+            label="音色"
+            hint={
+              favoriteVoices.length === 0
+                ? "我的收藏为空"
+                : `从「我的收藏」中选 (${favoriteVoices.length} 个可选)`
+            }
+          >
+            {favoriteVoices.length === 0 ? (
+              <div className="rounded border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning flex items-center justify-between gap-2">
+                <span>需要先添加音色到「我的收藏」</span>
+                <Button asChild variant="ghost" size="sm">
+                  <Link to="/voices" className="flex items-center gap-1">
+                    <Star size={12} /> 去添加
+                  </Link>
+                </Button>
+              </div>
+            ) : (
+              <>
+                <select
+                  className="h-9 w-full rounded border border-border bg-bg px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+                  value={draft.tts.voice}
+                  onChange={(e) => setDraft({ ...draft, tts: { ...draft.tts, voice: e.target.value } })}
+                >
+                  {/* If the current voice is not in favorites, surface it
+                      anyway so we don't silently drop the user's prior pick. */}
+                  {!favoriteVoices.some((v) => v.voice_id === draft.tts.voice) && draft.tts.voice && (
+                    <option value={draft.tts.voice}>
+                      {draft.tts.voice}（不在收藏中）
+                    </option>
+                  )}
+                  {favoriteVoices.map((v) => (
+                    <option key={v.voice_id} value={v.voice_id}>
+                      {v.label || v.voice_id} · {v.source === "cloned" ? "克隆" : "系统"}
+                    </option>
+                  ))}
+                </select>
+                <Link
+                  to="/voices"
+                  className="text-[11px] text-accent hover:underline mt-1 inline-block"
+                >
+                  在语音管理中维护收藏 →
+                </Link>
+              </>
+            )}
           </Field>
-          <Field label="速度 (0.5–2.0)">
-            <Input
-              type="number" step="0.05" min={0.5} max={2.0}
-              value={draft.tts.speed}
+          <Field label="语速">
+            <select
+              className="h-9 w-full rounded border border-border bg-bg px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              value={String(draft.tts.speed)}
               onChange={(e) => setDraft({ ...draft, tts: { ...draft.tts, speed: Number(e.target.value) } })}
-            />
+            >
+              {[
+                { v: 0.7, label: "0.7×（慢速）" },
+                { v: 0.85, label: "0.85×（偏慢）" },
+                { v: 1.0, label: "1.0×（标准）" },
+                { v: 1.15, label: "1.15×（偏快）" },
+                { v: 1.3, label: "1.3×（快速）" },
+              ].map((o) => (
+                <option key={o.v} value={String(o.v)}>{o.label}</option>
+              ))}
+            </select>
           </Field>
-          <Field label="并发数">
-            <Input
-              type="number" step="1" min={1} max={8}
-              value={draft.tts.concurrency}
+          <Field label="并发数" hint="同时处理的 TTS 任务数；过高可能触发限流">
+            <select
+              className="h-9 w-full rounded border border-border bg-bg px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              value={String(draft.tts.concurrency)}
               onChange={(e) => setDraft({ ...draft, tts: { ...draft.tts, concurrency: Number(e.target.value) } })}
-            />
+            >
+              {[1, 2, 3, 4, 6].map((n) => (
+                <option key={n} value={String(n)}>{n}</option>
+              ))}
+            </select>
           </Field>
         </div>
       </Section>
@@ -430,38 +470,41 @@ export function SettingsPage() {
       <Section icon={<Film size={16} />} title="视频参数">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="分辨率">
-            <Input
+            <select
+              className="h-9 w-full rounded border border-border bg-bg px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
               value={draft.video.resolution}
               onChange={(e) => setDraft({ ...draft, video: { ...draft.video, resolution: e.target.value } })}
-              placeholder="1920x1080"
-              list="video-res-options"
-            />
-            <datalist id="video-res-options">
-              <option value="1920x1080" />
-              <option value="1280x720" />
-              <option value="3840x2160" />
-            </datalist>
+            >
+              {[
+                { v: "1280x720", label: "720p (1280×720)" },
+                { v: "1920x1080", label: "1080p (1920×1080)" },
+                { v: "3840x2160", label: "4K (3840×2160)" },
+              ].map((o) => (
+                <option key={o.v} value={o.v}>{o.label}</option>
+              ))}
+            </select>
           </Field>
-          <Field label="FPS">
-            <Input
-              type="number" step="1" min={15} max={60}
-              value={draft.video.fps}
+          <Field label="帧率">
+            <select
+              className="h-9 w-full rounded border border-border bg-bg px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+              value={String(draft.video.fps)}
               onChange={(e) => setDraft({ ...draft, video: { ...draft.video, fps: Number(e.target.value) } })}
-            />
+            >
+              {[24, 30, 60].map((n) => (
+                <option key={n} value={String(n)}>{n} fps</option>
+              ))}
+            </select>
           </Field>
           <Field label="音频码率">
-            <Input
+            <select
+              className="h-9 w-full rounded border border-border bg-bg px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
               value={draft.video.audio_bitrate}
               onChange={(e) => setDraft({ ...draft, video: { ...draft.video, audio_bitrate: e.target.value } })}
-              placeholder="192k"
-              list="audio-bitrate-options"
-            />
-            <datalist id="audio-bitrate-options">
-              <option value="128k" />
-              <option value="192k" />
-              <option value="256k" />
-              <option value="320k" />
-            </datalist>
+            >
+              {["128k", "192k", "256k", "320k"].map((b) => (
+                <option key={b} value={b}>{b}</option>
+              ))}
+            </select>
           </Field>
         </div>
       </Section>
@@ -578,22 +621,6 @@ function LlmRoleCard({
         ) : null}
       </Field>
 
-      <Field label="Base URL" hint="留空使用 SDK 默认">
-        <Input
-          value={value.base_url}
-          onChange={(e) => onChange({ ...value, base_url: e.target.value })}
-          placeholder={preset?.base_url ?? "https://..."}
-        />
-      </Field>
-
-      <Field label="API Key 环境变量名">
-        <Input
-          value={value.api_key_env}
-          onChange={(e) => onChange({ ...value, api_key_env: e.target.value })}
-          className="font-mono text-xs"
-        />
-      </Field>
-
       <Field label="API Key" hint={fingerprint ? `当前指纹：${fingerprint}` : undefined}>
         <div className="flex gap-2">
           <Input
@@ -616,33 +643,67 @@ function LlmRoleCard({
         </div>
       </Field>
 
-      <div className="grid grid-cols-3 gap-2">
-        <Field label="max_tokens">
-          <Input
-            type="number" min={256} max={64000} step={256}
-            value={value.max_tokens}
-            onChange={(e) => onChange({ ...value, max_tokens: Number(e.target.value) })}
-          />
-        </Field>
-        <Field label="temperature">
-          <Input
-            type="number" step="0.05" min={0} max={2}
-            value={value.temperature ?? ""}
-            placeholder="（不发送）"
-            onChange={(e) => {
-              const v = e.target.value;
-              onChange({ ...value, temperature: v === "" ? null : Number(v) });
-            }}
-          />
-        </Field>
-        <Field label="timeout_sec">
-          <Input
-            type="number" min={5} max={600} step={5}
-            value={value.timeout_sec}
-            onChange={(e) => onChange({ ...value, timeout_sec: Number(e.target.value) })}
-          />
-        </Field>
-      </div>
+      <Field label="max_tokens">
+        <select
+          className="h-9 w-full rounded border border-border bg-bg px-3 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30"
+          value={value.max_tokens}
+          onChange={(e) => onChange({ ...value, max_tokens: Number(e.target.value) })}
+        >
+          {[2000, 4000, 6000, 8000, 12000, 16000, 32000].map((n) => (
+            <option key={n} value={n}>
+              {n.toLocaleString()}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <details className="rounded border border-border/60 bg-surface-2/30 group">
+        <summary className="px-3 py-1.5 text-xs text-fg-muted cursor-pointer select-none flex items-center justify-between">
+          <span>高级选项（默认无需修改）</span>
+          <span className="text-[10px] opacity-60 group-open:hidden">展开</span>
+        </summary>
+        <div className="p-3 pt-1 space-y-3 border-t border-border/40 mt-1">
+          <Field label="Base URL" hint="留空使用 SDK 默认">
+            <Input
+              value={value.base_url}
+              onChange={(e) => onChange({ ...value, base_url: e.target.value })}
+              placeholder={preset?.base_url ?? "https://..."}
+            />
+          </Field>
+
+          <Field
+            label="环境变量名"
+            hint="API Key 在系统中的环境变量标识；通常用预设的就好"
+          >
+            <Input
+              value={value.api_key_env}
+              onChange={(e) => onChange({ ...value, api_key_env: e.target.value })}
+              className="font-mono text-xs"
+            />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="temperature">
+              <Input
+                type="number" step="0.05" min={0} max={2}
+                value={value.temperature ?? ""}
+                placeholder="（不发送）"
+                onChange={(e) => {
+                  const v = e.target.value;
+                  onChange({ ...value, temperature: v === "" ? null : Number(v) });
+                }}
+              />
+            </Field>
+            <Field label="timeout_sec">
+              <Input
+                type="number" min={5} max={600} step={5}
+                value={value.timeout_sec}
+                onChange={(e) => onChange({ ...value, timeout_sec: Number(e.target.value) })}
+              />
+            </Field>
+          </div>
+        </div>
+      </details>
 
       {probeStatus && !probeStatus.ok && (
         <div className="rounded bg-danger/10 border border-danger/30 px-2 py-1.5 text-xs text-danger">

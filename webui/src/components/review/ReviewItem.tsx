@@ -55,11 +55,18 @@ export function ReviewItem({
           <Checkbox
             checked={checked}
             onCheckedChange={() => onToggle()}
-            aria-label={typeof label === "string" ? `勾选不通过：${label}` : "勾选不通过"}
+            aria-label={typeof label === "string" ? `标记此项需修订：${label}` : "标记此项需修订"}
           />
         </label>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-fg truncate">{label}</div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium text-fg truncate">{label}</span>
+            {checked && (
+              <span className="rounded-full px-1.5 py-0.5 text-[10px] bg-warning/20 text-warning shrink-0">
+                需修订
+              </span>
+            )}
+          </div>
           {meta && (
             <div className="mt-0.5 text-xs text-fg-muted truncate">{meta}</div>
           )}

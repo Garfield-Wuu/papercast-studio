@@ -8,6 +8,7 @@ import {
   Folders,
   Mic2,
   Sliders,
+  ListChecks,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -17,15 +18,19 @@ import { cn } from "@/lib/cn";
 import type { components } from "@/lib/api.gen";
 
 type HealthResponse = components["schemas"]["HealthResponse"];
+type PaperSummary = components["schemas"]["PaperSummary"];
 
 interface NavSpec {
   to: string;
   label: string;
   icon: LucideIcon;
+  /** Optional source for a numeric badge (e.g. count of awaiting_review). */
+  badge?: "review_queue";
 }
 
 const NAV: NavSpec[] = [
   { to: "/", label: "工作区", icon: Library },
+  { to: "/review", label: "待审阅", icon: ListChecks, badge: "review_queue" },
   { to: "/files", label: "文件管理", icon: Folders },
   { to: "/voices", label: "语音管理", icon: Mic2 },
   { to: "/settings", label: "配置", icon: Sliders },
@@ -34,9 +39,9 @@ const NAV: NavSpec[] = [
 /**
  * Fixed top header — logo / nav / health indicator / theme toggle.
  *
- * Intentionally narrow scope: anything paper-specific lives in the
- * page itself; this header only speaks "system-level" data
- * (health, navigation, theme).
+ * "待审阅" carries a soft warning badge with the count of papers
+ * currently parked at `awaiting_review`, so the reviewer sees the
+ * queue without needing to enter the page first.
  */
 export function Header() {
   const { theme, toggle } = useTheme();
@@ -46,6 +51,13 @@ export function Header() {
     refetchInterval: 30_000,
     retry: 1,
   });
+  const { data: papers } = useQuery({
+    queryKey: ["papers"],
+    queryFn: () => api.get<PaperSummary[]>("/papers"),
+    refetchInterval: 30_000,
+  });
+  const reviewQueueCount =
+    papers?.filter((p) => p.stage === "awaiting_review").length ?? 0;
 
   return (
     <header className="sticky top-0 z-30 h-14 bg-surface/85 border-b border-border backdrop-blur">
@@ -60,7 +72,16 @@ export function Header() {
 
         <nav className="flex items-center gap-1">
           {NAV.map((item) => (
-            <NavItem key={item.to} to={item.to} icon={item.icon}>
+            <NavItem
+              key={item.to}
+              to={item.to}
+              icon={item.icon}
+              badge={
+                item.badge === "review_queue" && reviewQueueCount > 0
+                  ? reviewQueueCount
+                  : undefined
+              }
+            >
               {item.label}
             </NavItem>
           ))}
@@ -87,10 +108,12 @@ function NavItem({
   to,
   icon: Icon,
   children,
+  badge,
 }: {
   to: string;
   icon: LucideIcon;
   children: React.ReactNode;
+  badge?: number;
 }) {
   return (
     <NavLink
@@ -107,6 +130,11 @@ function NavItem({
     >
       <Icon size={14} />
       {children}
+      {badge != null && badge > 0 && (
+        <span className="ml-0.5 inline-flex min-w-[16px] h-4 items-center justify-center rounded-full bg-warning/20 text-warning text-[10px] font-medium px-1">
+          {badge > 99 ? "99+" : badge}
+        </span>
+      )}
     </NavLink>
   );
 }

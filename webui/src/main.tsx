@@ -7,6 +7,7 @@ import "@/styles/global.css";
 import { App } from "./App";
 import { PapersPage } from "@/pages/PapersPage";
 import { PaperDetailPage } from "@/pages/PaperDetailPage";
+import { ReviewQueuePage } from "@/pages/ReviewQueuePage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { FilesPage } from "@/pages/FilesPage";
 import { VoicesPage } from "@/pages/VoicesPage";
@@ -27,6 +28,7 @@ const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <PapersPage /> },
+      { path: "review", element: <ReviewQueuePage /> },
       { path: "papers/:paperId", element: <PaperDetailPage /> },
       { path: "files", element: <FilesPage /> },
       { path: "voices", element: <VoicesPage /> },

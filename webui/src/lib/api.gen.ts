@@ -657,6 +657,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/voice/{voice_id}/favorite": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Favorite
+         * @description Mark a voice as favorited / unfavorited.
+         *
+         *     Behavior:
+         *       - If `voice_id` is already in voices.json (typically a cloned
+         *         voice), update its `is_favorite` flag in place.
+         *       - Otherwise (a system voice the user wants to favorite), append a
+         *         new record with `source="system"` and the supplied label, so
+         *         future renders don't need to look the label up again.
+         *       - Setting `is_favorite=False` on a system voice removes its
+         *         record entirely (we don't keep "unfavorited" stubs around).
+         */
+        post: operations["set_favorite_api_voice__voice_id__favorite_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voice/script": {
         parameters: {
             query?: never;
@@ -877,6 +906,24 @@ export interface components {
             ok: boolean;
             /** Detail */
             detail?: string | null;
+        };
+        /**
+         * FavoriteRequest
+         * @description POST /api/voice/{voice_id}/favorite — toggle favorite state.
+         *
+         *     For system voices that aren't yet in voices.json, supply `label`
+         *     so we can render them later without re-fetching the public catalog.
+         */
+        FavoriteRequest: {
+            /** Is Favorite */
+            is_favorite: boolean;
+            /** Label */
+            label?: string | null;
+            /**
+             * Source
+             * @default system
+             */
+            source: string;
         };
         /** FileNode */
         FileNode: {
@@ -1151,6 +1198,16 @@ export interface components {
              * @default speech-2.6-hd
              */
             model: string;
+            /**
+             * Is Favorite
+             * @default true
+             */
+            is_favorite: boolean;
+            /**
+             * Source
+             * @default cloned
+             */
+            source: string;
         };
     };
     responses: never;
@@ -2206,6 +2263,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_favorite_api_voice__voice_id__favorite_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FavoriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceRecord"];
                 };
             };
             /** @description Validation Error */

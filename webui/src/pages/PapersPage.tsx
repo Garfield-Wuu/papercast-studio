@@ -45,14 +45,14 @@ export function PapersPage() {
           icon={Clock}
           value={stats.inFlight}
           label="进行中"
-          hint="未发布且未失败"
+          hint="正在跑流水线"
           tone="accent"
         />
         <StatItem
           icon={Sparkles}
           value={stats.published}
           label="已发布"
-          hint="output/ 已生成 mp4"
+          hint="视频已生成"
           tone="success"
         />
         <StatItem

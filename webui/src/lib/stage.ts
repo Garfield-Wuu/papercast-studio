@@ -55,6 +55,135 @@ export const ALL_STAGES: readonly Stage[] = [
   "failed" as Stage,
 ];
 
+// ---------------------------------------------------------------------------
+// Coarse 5-segment grouping (P10)
+//
+// The 12-stage detail view above is technically accurate but visually
+// noisy — viewers want to know "where roughly is this paper" at a
+// glance. We bucket the 12 stages into 5 user-visible groups; the
+// PipelineProgress component renders these as a horizontal track with
+// a percentage and a current-stage subtitle.
+// ---------------------------------------------------------------------------
+
+export interface StageGroup {
+  id: "ingest" | "parse" | "produce" | "review" | "publish";
+  label: string;
+  description: string;
+  /** Member stages, in pipeline order. */
+  stages: Stage[];
+}
+
+export const STAGE_GROUPS: StageGroup[] = [
+  {
+    id: "ingest",
+    label: "上传",
+    description: "PDF 已注册",
+    stages: ["ingested"],
+  },
+  {
+    id: "parse",
+    label: "解析",
+    description: "文本块 + 图表抽取",
+    stages: ["parsed", "figures_split"],
+  },
+  {
+    id: "produce",
+    label: "制作",
+    description: "精读 + 制作 PPT 与讲稿",
+    stages: ["read_done", "slides_done", "script_done"],
+  },
+  {
+    id: "review",
+    label: "审阅",
+    description: "等待人工审阅",
+    stages: ["awaiting_review", "approved"],
+  },
+  {
+    id: "publish",
+    label: "发布",
+    description: "TTS + 视频合成与发布",
+    stages: ["tts_submitted", "tts_done", "composed", "published"],
+  },
+];
+
+const _STAGE_INDEX: Record<Stage, number> = (() => {
+  const out = {} as Record<Stage, number>;
+  PIPELINE_STAGES.forEach((s, i) => {
+    out[s.id] = i;
+  });
+  out.failed = -1 as never;
+  return out;
+})();
+
+/** Find the group that owns `stage`. Returns null for `failed`. */
+export function groupFor(stage: Stage | null | undefined): StageGroup | null {
+  if (!stage || stage === "failed") return null;
+  return STAGE_GROUPS.find((g) => g.stages.includes(stage)) ?? null;
+}
+
+/**
+ * Treat the 12 happy-path stages as a 0-100 scale. `failed` returns the
+ * progress of whatever stage was last reached (caller knows the
+ * isFailed flag separately).
+ */
+export function progressOf(
+  current: Stage | null | undefined,
+  isFailed: boolean,
+  history?: { stage: Stage }[],
+): number {
+  if (!current) return 0;
+  let stage: Stage = current;
+  if (isFailed && stage === "failed") {
+    // Find the most recent non-failed stage in history, fall back to
+    // the immediately preceding linear stage.
+    if (history) {
+      for (let i = history.length - 1; i >= 0; i--) {
+        if (history[i].stage !== "failed") {
+          stage = history[i].stage;
+          break;
+        }
+      }
+    }
+  }
+  if (stage === "failed") return 0;
+  const idx = _STAGE_INDEX[stage] ?? 0;
+  // index 0 (ingested) → ~5%; published (last) → 100%
+  const total = PIPELINE_STAGES.length - 1;
+  return Math.round(((idx + 0.5) / total) * 1000) / 10; // one decimal
+}
+
+export function groupStatusFor(
+  group: StageGroup,
+  current: Stage | null | undefined,
+  isFailed: boolean,
+): "done" | "active" | "review" | "failed" | "pending" {
+  if (!current) return "pending";
+  if (isFailed) {
+    // Highlight the failed group as such; everything before it stays
+    // 'done' so the eye can read where the pipeline stopped.
+    const failedGroup = groupFor(
+      // The most recent non-failed stage, if reachable from current.
+      // This conservative branch keeps state visible even when
+      // history isn't passed in.
+      current === "failed" ? "ingested" : current,
+    );
+    const groupIdx = STAGE_GROUPS.findIndex((g) => g.id === group.id);
+    const failedIdx = failedGroup
+      ? STAGE_GROUPS.findIndex((g) => g.id === failedGroup.id)
+      : 0;
+    if (groupIdx < failedIdx) return "done";
+    if (groupIdx === failedIdx) return "failed";
+    return "pending";
+  }
+  if (current === "awaiting_review" && group.id === "review") return "review";
+  const curIdx = _STAGE_INDEX[current] ?? 0;
+  const groupStart = _STAGE_INDEX[group.stages[0]] ?? 0;
+  const groupEnd = _STAGE_INDEX[group.stages[group.stages.length - 1]] ?? 0;
+  if (curIdx > groupEnd) return "done";
+  if (curIdx >= groupStart) return "active";
+  return "pending";
+}
+
 /** True if `current` has reached or passed `target` in the linear flow. */
 export function hasReached(current: Stage | null | undefined, target: Stage): boolean {
   if (!current) return false;

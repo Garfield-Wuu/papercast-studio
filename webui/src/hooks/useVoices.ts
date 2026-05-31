@@ -17,6 +17,10 @@ export interface VoiceRecord {
   source_file_id: number | null;
   prompt_text: string | null;
   model: string;
+  /** P10: in 我的收藏 dropdown? */
+  is_favorite: boolean;
+  /** P10: cloned by user vs system voice favorited from public catalog. */
+  source: "cloned" | "system";
 }
 
 export interface CloneArgs {
@@ -134,5 +138,31 @@ export interface ScriptResponse {
 export function useGenerateScript() {
   return useMutation<ScriptResponse, Error, { keywords: string[] }>({
     mutationFn: (body) => api.post<ScriptResponse>("/voice/script", body),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// /api/voice/{voice_id}/favorite — toggle favorite (P10)
+// ---------------------------------------------------------------------------
+
+export interface FavoriteArgs {
+  voice_id: string;
+  is_favorite: boolean;
+  /** Required when favoriting a system voice not yet in voices.json. */
+  label?: string;
+  source?: "cloned" | "system";
+}
+
+export function useToggleFavorite() {
+  const qc = useQueryClient();
+  return useMutation<VoiceRecord, Error, FavoriteArgs>({
+    mutationFn: ({ voice_id, ...body }) =>
+      api.post<VoiceRecord>(
+        `/voice/${encodeURIComponent(voice_id)}/favorite`,
+        body,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["voices", "list"] });
+    },
   });
 }

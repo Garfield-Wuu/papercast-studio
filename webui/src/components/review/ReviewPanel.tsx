@@ -10,7 +10,7 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Input";
-import { Card, CardHeader, CardBody, CardFooter } from "@/components/ui/Card";
+import { Card, CardHeader, CardBody } from "@/components/ui/Card";
 import { FiguresTab } from "./tabs/FiguresTab";
 import { SlidesScriptTab } from "./tabs/SlidesScriptTab";
 import { FactsTab } from "./tabs/FactsTab";
@@ -25,7 +25,6 @@ import {
   type RegenerateItem,
   type RegenerateTarget,
 } from "@/hooks/useRegenerate";
-import { cn } from "@/lib/cn";
 
 interface Props {
   paperId: string;
@@ -176,14 +175,67 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
   return (
     <Card tone="warning">
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg font-medium text-fg flex items-center gap-2">
             <ListChecks size={18} className="text-warning" />
             人工审阅
           </h2>
           <Counter total={totalChecked} />
         </div>
+        {/* Inline guide — visible the moment the panel opens. */}
+        <p className="mt-2 text-xs text-fg-muted leading-relaxed">
+          逐 Tab 浏览切图 / PPT 讲稿 / 事实卡。
+          <span className="text-success"> ✅ 不勾选 = 通过该项</span>。
+          觉得有问题 → 勾选并写反馈 → 点「局部重生」让 LLM 改写。全部 OK 后点
+          <span className="text-fg font-medium">「全部通过」</span>启动 TTS 与视频合成。
+        </p>
       </CardHeader>
+
+      {/* Sticky action bar at the top of the body — easier to find than buried in CardFooter. */}
+      <div className="sticky top-0 z-10 bg-surface/85 backdrop-blur border-b border-border px-4 py-2 flex flex-wrap items-center gap-2">
+        {regenLog && (
+          <span className="text-xs text-fg-muted mr-auto truncate max-w-[40%]" aria-live="polite">
+            {regenLog}
+          </span>
+        )}
+        {!regenLog && <span className="mr-auto" />}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={runPreview}
+          disabled={!canRegenerate}
+        >
+          <Eye size={14} />
+          预览 prompt
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={runRegenerate}
+          disabled={!canRegenerate || regenerate.isPending}
+          title={
+            llmChecked === 0
+              ? "勾选「PPT · 讲稿」或「事实卡」中的项再点重生（图像不会用 LLM）"
+              : ""
+          }
+        >
+          <Sparkles
+            size={14}
+            className={regenerate.isPending ? "animate-spin" : ""}
+          />
+          {regenerate.isPending ? "重生中…" : `局部重生（${llmChecked}）`}
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          disabled={!canApprove || approve.isPending}
+          onClick={() => setApproveOpen(true)}
+          title={canApprove ? "确认全部通过" : `请先重生或手动修订被标记的 ${totalChecked} 项`}
+        >
+          <CheckCheck size={14} />
+          全部通过 →
+        </Button>
+      </div>
 
       <CardBody className="space-y-5">
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as Tab)}>
@@ -225,50 +277,6 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
         </section>
       </CardBody>
 
-      <CardFooter className="flex flex-wrap items-center gap-2">
-        {regenLog && (
-          <span className="text-xs text-fg-muted mr-auto" aria-live="polite">
-            {regenLog}
-          </span>
-        )}
-        <Button
-          variant="ghost"
-          size="md"
-          onClick={runPreview}
-          disabled={!canRegenerate}
-        >
-          <Eye size={14} />
-          预览 prompt
-        </Button>
-        <Button
-          variant="secondary"
-          size="md"
-          onClick={runRegenerate}
-          disabled={!canRegenerate || regenerate.isPending}
-          title={
-            llmChecked === 0
-              ? "勾选「PPT · 讲稿」或「事实卡」中的项再点重生（图像不会用 LLM）"
-              : ""
-          }
-        >
-          <Sparkles
-            size={14}
-            className={regenerate.isPending ? "animate-spin" : ""}
-          />
-          {regenerate.isPending ? "重生中…" : `局部重生（${llmChecked} 项）`}
-        </Button>
-        <Button
-          variant="primary"
-          size="md"
-          disabled={!canApprove || approve.isPending}
-          onClick={() => setApproveOpen(true)}
-          title={canApprove ? "确认全部通过" : "请先处理被勾选的项再审批"}
-        >
-          <CheckCheck size={14} />
-          全部通过 →
-        </Button>
-      </CardFooter>
-
       <ApproveDialog
         open={approveOpen}
         onOpenChange={setApproveOpen}
@@ -277,7 +285,7 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
         saving={approve.isPending}
         staleHint={
           totalChecked > 0
-            ? `还有 ${totalChecked} 项被勾选，确认要在不修改的情况下通过吗？`
+            ? `还有 ${totalChecked} 项被标记需修订，确认要在不修改的情况下通过吗？`
             : null
         }
         onSubmit={runApprove}
@@ -321,10 +329,10 @@ function Trigger({
 function Counter({ total }: { total: number }) {
   if (total === 0) {
     return (
-      <span className={cn("text-xs", "text-success")}>
-        全部通过 · 可以审批
+      <span className="text-xs text-success font-medium">
+        全部通过 · 可以发布
       </span>
     );
   }
-  return <span className="text-xs text-warning">{total} 项待处理</span>;
+  return <span className="text-xs text-warning">{total} 项标记需修订</span>;
 }

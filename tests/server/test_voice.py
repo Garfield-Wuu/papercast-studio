@@ -219,6 +219,106 @@ def test_delete_404_when_missing(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# /api/voice/{voice_id}/favorite — toggle favorite (P10)
+# ---------------------------------------------------------------------------
+
+
+def test_favorite_creates_system_voice_record(
+    client: TestClient, workspace: Path,
+) -> None:
+    """Favoriting a system voice that's not in voices.json yet creates
+    a fresh row with source='system'."""
+    r = client.post(
+        "/api/voice/Chinese (Mandarin)_News_Anchor/favorite",
+        json={"is_favorite": True, "label": "新闻女声", "source": "system"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["voice_id"] == "Chinese (Mandarin)_News_Anchor"
+    assert body["is_favorite"] is True
+    assert body["source"] == "system"
+    on_disk = json.loads(
+        (workspace / "config" / "voices.json").read_text(encoding="utf-8"),
+    )
+    assert len(on_disk) == 1
+    assert on_disk[0]["label"] == "新闻女声"
+
+
+def test_unfavorite_removes_system_voice_record(
+    client: TestClient, workspace: Path,
+) -> None:
+    """Unfavoriting a system voice removes it from voices.json entirely;
+    cloned voices stay (just flag flips to False)."""
+    seed = [
+        {
+            "voice_id": "male-qn-badao",
+            "label": "霸道青年",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "model": "speech-2.6-hd",
+            "is_favorite": True,
+            "source": "system",
+        },
+        {
+            "voice_id": "myclone1",
+            "label": "我自己",
+            "created_at": "2026-01-02T00:00:00+00:00",
+            "model": "speech-2.6-hd",
+            "is_favorite": True,
+            "source": "cloned",
+        },
+    ]
+    (workspace / "config" / "voices.json").write_text(
+        json.dumps(seed), encoding="utf-8",
+    )
+
+    # Unfavorite system voice → removed
+    r = client.post(
+        "/api/voice/male-qn-badao/favorite", json={"is_favorite": False},
+    )
+    assert r.status_code == 200
+    assert r.json()["is_favorite"] is False
+
+    # Unfavorite cloned voice → kept, flag flipped
+    r = client.post(
+        "/api/voice/myclone1/favorite", json={"is_favorite": False},
+    )
+    assert r.status_code == 200
+    assert r.json()["is_favorite"] is False
+
+    on_disk = json.loads(
+        (workspace / "config" / "voices.json").read_text(encoding="utf-8"),
+    )
+    assert [v["voice_id"] for v in on_disk] == ["myclone1"]
+    assert on_disk[0]["is_favorite"] is False
+
+
+def test_favorite_404_unfavorite_unknown_voice(client: TestClient) -> None:
+    """Trying to UNfavorite a voice that has no record yields 404 (no-op
+    isn't useful — the user clearly thinks something is there)."""
+    r = client.post(
+        "/api/voice/never_seen/favorite", json={"is_favorite": False},
+    )
+    assert r.status_code == 404
+
+
+def test_clone_marks_record_favorite_by_default(
+    client: TestClient, _patch_minimax_client: _StubClient, workspace: Path,
+) -> None:
+    """P10: cloned voices land in 我的收藏 by default."""
+    r = client.post(
+        "/api/voice/clone",
+        data={"voice_id": "newclone1"},
+        files={"file": ("a.mp3", io.BytesIO(b"x" * 100), "audio/mpeg")},
+    )
+    assert r.status_code == 201
+    on_disk = json.loads(
+        (workspace / "config" / "voices.json").read_text(encoding="utf-8"),
+    )
+    assert on_disk[0]["is_favorite"] is True
+    assert on_disk[0]["source"] == "cloned"
+
+
+# ---------------------------------------------------------------------------
 # /api/voice/script — LLM clone-sample generation (P8)
 # ---------------------------------------------------------------------------
 

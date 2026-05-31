@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Mic, Play, Loader2, Trash2, AlertCircle } from "lucide-react";
+import { Mic, Play, Loader2, Trash2, AlertCircle, Star } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
@@ -7,62 +7,103 @@ import { Textarea } from "@/components/ui/Input";
 import {
   useDeleteVoice,
   usePreviewVoice,
+  useToggleFavorite,
   useVoices,
   type VoiceRecord,
 } from "@/hooks/useVoices";
 import { SYSTEM_VOICES, type SystemVoice } from "@/lib/minimax-voices";
 import { cn } from "@/lib/cn";
 
-type Filter = "all" | "zh-CN" | "en" | "mine";
+type Filter = "favorites" | "zh-CN" | "en" | "all";
 
 interface MergedRow {
   voice_id: string;
   label: string;
   language: "zh-CN" | "en";
   source: "system" | "cloned";
-  /** Only for source=cloned. */
+  is_favorite: boolean;
+  /** Only for source=cloned (carries created_at, file_id, etc.). */
   record?: VoiceRecord;
-  /** Only for source=system. */
   category?: SystemVoice["category"];
 }
 
 /**
  * Merge MiniMax system voices + locally-cloned voices into one
- * filterable list. The 我的 tab is just `source==="cloned"`; deletion
- * is only offered there. All voices support 试听 — even system ones,
- * since the MiniMax preview API accepts public voice_ids.
+ * filterable list (P10 redesign).
+ *
+ * Source of truth for `is_favorite`:
+ *   - cloned voice → voices.json record's is_favorite (defaults true)
+ *   - system voice → exists in voices.json with source="system" iff
+ *     user has favorited it
+ *
+ * Filter tabs:
+ *   - 我的收藏: every row with is_favorite=true
+ *   - 中文 / English: language filter on the full union
+ *   - 全部: everything (defaults system voices visible to ⭐)
  */
 export function VoiceList() {
   const { data: voices, isLoading, error } = useVoices();
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>("favorites");
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const rows = useMemo<MergedRow[]>(() => {
-    const sys: MergedRow[] = SYSTEM_VOICES.map((v) => ({
-      voice_id: v.voice_id,
-      label: v.label,
-      language: v.language,
-      source: "system" as const,
-      category: v.category,
-    }));
-    const cloned: MergedRow[] = (voices ?? []).map((v) => ({
-      voice_id: v.voice_id,
-      label: v.label ?? v.voice_id,
-      // Cloned voices don't carry a language tag; classify by character set as best-effort.
-      language: /[一-鿿]/.test(v.label ?? "") ? "zh-CN" : "zh-CN",
-      source: "cloned" as const,
-      record: v,
-    }));
-    return [...cloned, ...sys];
+    // Index voices.json by voice_id so we can read is_favorite for both
+    // cloned and system entries in one pass.
+    const byId = new Map<string, VoiceRecord>(
+      (voices ?? []).map((v) => [v.voice_id, v]),
+    );
+    const seenSystem = new Set<string>();
+
+    const sys: MergedRow[] = SYSTEM_VOICES.map((v) => {
+      seenSystem.add(v.voice_id);
+      const rec = byId.get(v.voice_id);
+      return {
+        voice_id: v.voice_id,
+        label: v.label,
+        language: v.language,
+        source: "system" as const,
+        is_favorite: rec?.is_favorite === true,
+        category: v.category,
+      };
+    });
+
+    const clonedRows: MergedRow[] = [];
+    const systemFavOnly: MergedRow[] = [];
+    for (const v of voices ?? []) {
+      if (v.source === "cloned") {
+        clonedRows.push({
+          voice_id: v.voice_id,
+          label: v.label ?? v.voice_id,
+          // Cloned voices don't carry a language tag; classify by char set.
+          language: /[一-鿿]/.test(v.label ?? "") ? "zh-CN" : "zh-CN",
+          source: "cloned",
+          is_favorite: v.is_favorite,
+          record: v,
+        });
+      } else if (v.source === "system" && !seenSystem.has(v.voice_id)) {
+        // User favorited a system voice that's no longer in our static
+        // SYSTEM_VOICES catalog (e.g. MiniMax retired it). Surface it
+        // anyway so the user can unfavorite or use it.
+        systemFavOnly.push({
+          voice_id: v.voice_id,
+          label: v.label ?? v.voice_id,
+          language: /[A-Za-z]/.test(v.label ?? "") ? "en" : "zh-CN",
+          source: "system",
+          is_favorite: v.is_favorite,
+        });
+      }
+    }
+
+    return [...clonedRows, ...sys, ...systemFavOnly];
   }, [voices]);
 
   const filtered = useMemo(() => {
     if (filter === "all") return rows;
-    if (filter === "mine") return rows.filter((r) => r.source === "cloned");
+    if (filter === "favorites") return rows.filter((r) => r.is_favorite);
     return rows.filter((r) => r.language === filter);
   }, [rows, filter]);
 
-  const myCount = rows.filter((r) => r.source === "cloned").length;
+  const favCount = rows.filter((r) => r.is_favorite).length;
 
   return (
     <Card>
@@ -72,15 +113,17 @@ export function VoiceList() {
         </h2>
         <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)}>
           <TabsList>
-            <TabsTrigger value="all">全部 ({rows.length})</TabsTrigger>
+            <TabsTrigger value="favorites">
+              <Star size={12} /> 我的收藏 ({favCount})
+            </TabsTrigger>
             <TabsTrigger value="zh-CN">中文</TabsTrigger>
             <TabsTrigger value="en">English</TabsTrigger>
-            <TabsTrigger value="mine">我的克隆 ({myCount})</TabsTrigger>
+            <TabsTrigger value="all">全部 ({rows.length})</TabsTrigger>
           </TabsList>
-          <TabsContent value="all" />
+          <TabsContent value="favorites" />
           <TabsContent value="zh-CN" />
           <TabsContent value="en" />
-          <TabsContent value="mine" />
+          <TabsContent value="all" />
         </Tabs>
       </div>
       {error && (
@@ -92,7 +135,9 @@ export function VoiceList() {
         <div className="px-4 py-8 text-sm text-fg-muted">正在加载…</div>
       ) : filtered.length === 0 ? (
         <div className="px-4 py-8 text-sm text-fg-muted">
-          {filter === "mine" ? "还没有克隆音色 — 在下方向导里克隆一个。" : "没有匹配项。"}
+          {filter === "favorites"
+            ? "还没有收藏 — 点行尾的 ⭐ 把系统音色加进收藏，或者在下方向导里克隆一个。"
+            : "没有匹配项。"}
         </div>
       ) : (
         <ul className="divide-y divide-border max-h-[480px] overflow-y-auto scrollbar-thin">
@@ -128,10 +173,10 @@ function Row({
 }) {
   const del = useDeleteVoice();
   const preview = usePreviewVoice();
+  const toggleFav = useToggleFavorite();
   const [text, setText] = useState(() => DEFAULT_PREVIEW_TEXT[row.language]);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
-  // Cleanup blob on unmount or replacement.
   useEffect(() => {
     return () => {
       if (audioUrl) URL.revokeObjectURL(audioUrl);
@@ -154,9 +199,34 @@ function Row({
     del.mutate(row.voice_id);
   };
 
+  const onToggleFavorite = () => {
+    toggleFav.mutate({
+      voice_id: row.voice_id,
+      is_favorite: !row.is_favorite,
+      label: row.label,
+      source: row.source,
+    });
+  };
+
   return (
     <li className="px-4 py-3 space-y-2">
       <div className="flex items-center gap-3 flex-wrap">
+        <button
+          type="button"
+          aria-label={row.is_favorite ? "从收藏移除" : "加入收藏"}
+          onClick={onToggleFavorite}
+          disabled={toggleFav.isPending}
+          className={cn(
+            "shrink-0 size-8 rounded grid place-items-center transition-colors",
+            "hover:bg-surface-2",
+            row.is_favorite ? "text-warning" : "text-fg-muted/50 hover:text-warning",
+          )}
+        >
+          <Star
+            size={16}
+            className={row.is_favorite ? "fill-warning" : ""}
+          />
+        </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-2 flex-wrap">
             <code className="font-mono text-xs text-fg break-all">{row.voice_id}</code>

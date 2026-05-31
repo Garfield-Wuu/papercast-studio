@@ -59,6 +59,11 @@ class VoiceRecord(BaseModel):
     source_file_id: int | None = None
     prompt_text: str | None = None
     model: str = "speech-2.6-hd"
+    # P10: source distinguishes user clones from system voices added to
+    # the favorites list. is_favorite controls whether the voice shows
+    # up in Settings → 音色 dropdown.
+    is_favorite: bool = True
+    source: str = "cloned"  # "cloned" | "system"
 
 
 class CloneResponse(BaseModel):
@@ -74,6 +79,17 @@ class PreviewRequest(BaseModel):
     voice_id: str
     speed: float = 1.0
     model: str = "speech-2.6-hd"
+
+
+class FavoriteRequest(BaseModel):
+    """POST /api/voice/{voice_id}/favorite — toggle favorite state.
+
+    For system voices that aren't yet in voices.json, supply `label`
+    so we can render them later without re-fetching the public catalog.
+    """
+    is_favorite: bool
+    label: str | None = None
+    source: str = "system"  # only meaningful when creating a fresh row
 
 
 class ScriptRequest(BaseModel):
@@ -216,6 +232,10 @@ async def clone(
         "source_file_id": result["file_id"],
         "prompt_text": prompt_text,
         "model": model,
+        # P10: cloned voices land in 我的收藏 by default — user just
+        # spent quota on them, almost certainly wants to use them.
+        "is_favorite": True,
+        "source": "cloned",
     }
     existing.append(record)
     _save_voices(voices_file, existing)
@@ -270,6 +290,69 @@ def delete_voice(voice_id: str, request: Request) -> dict[str, str]:
         raise HTTPException(404, f"voice {voice_id!r} not in local voices.json")
     _save_voices(voices_file, new_records)
     return {"deleted": voice_id}
+
+
+# ---------------------------------------------------------------------------
+# /api/voice/{voice_id}/favorite — toggle favorite (P10)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/{voice_id}/favorite", response_model=VoiceRecord)
+def set_favorite(
+    voice_id: str, body: FavoriteRequest, request: Request,
+) -> VoiceRecord:
+    """Mark a voice as favorited / unfavorited.
+
+    Behavior:
+      - If `voice_id` is already in voices.json (typically a cloned
+        voice), update its `is_favorite` flag in place.
+      - Otherwise (a system voice the user wants to favorite), append a
+        new record with `source="system"` and the supplied label, so
+        future renders don't need to look the label up again.
+      - Setting `is_favorite=False` on a system voice removes its
+        record entirely (we don't keep "unfavorited" stubs around).
+    """
+    voices_file = _voices_path(request)
+    records = _load_voices(voices_file)
+
+    for r in records:
+        if r.get("voice_id") == voice_id:
+            if body.is_favorite:
+                r["is_favorite"] = True
+                _save_voices(voices_file, records)
+                return VoiceRecord(**r)
+            # Unfavoriting:
+            #   - cloned voices stay in voices.json with is_favorite=False
+            #     (they cost real quota; the user might want to re-favorite later)
+            #   - system voices are removed completely (see above)
+            if r.get("source") == "system":
+                new_records = [v for v in records if v.get("voice_id") != voice_id]
+                _save_voices(voices_file, new_records)
+                return VoiceRecord(
+                    voice_id=voice_id,
+                    created_at=r.get("created_at", ""),
+                    is_favorite=False,
+                    source="system",
+                    label=r.get("label"),
+                )
+            r["is_favorite"] = False
+            _save_voices(voices_file, records)
+            return VoiceRecord(**r)
+
+    # Not in catalog yet — only meaningful for "favorite a system voice"
+    if not body.is_favorite:
+        raise HTTPException(404, f"voice {voice_id!r} not in local voices.json")
+    new_record = {
+        "voice_id": voice_id,
+        "label": body.label,
+        "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "is_favorite": True,
+        "source": body.source or "system",
+        "model": "speech-2.6-hd",
+    }
+    records.append(new_record)
+    _save_voices(voices_file, records)
+    return VoiceRecord(**new_record)
 
 
 # ---------------------------------------------------------------------------
