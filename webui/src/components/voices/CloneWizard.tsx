@@ -98,9 +98,9 @@ function reducer(state: State, action: Action): State {
 }
 
 const STEP_LABELS: Record<Step, string> = {
-  script: "1 · 写讲稿",
-  audio: "2 · 录音 / 上传",
-  register: "3 · 注册克隆",
+  script: "写讲稿",
+  audio: "录音 / 上传",
+  register: "注册克隆",
 };
 
 /** Top-level wizard. Render a stepper, then the active step's body. */

@@ -26,6 +26,7 @@ Thumbs.db
 # --- secrets ---
 config/secrets.env
 config/config.yaml
+config/voices.json
 .env
 .env.*
 !.env.example
