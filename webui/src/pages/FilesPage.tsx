@@ -11,11 +11,14 @@ import {
   ArrowRight,
   AlertCircle,
   CalendarDays,
+  HardDrive,
+  Folders,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
+import { StatItem, StatRow } from "@/components/ui/StatItem";
 import {
   downloadUrl,
   useDeletePath,
@@ -59,28 +62,82 @@ export function FilesPage() {
     );
   }, [data, query]);
 
+  const stats = useMemo(() => {
+    const list = data ?? [];
+    let totalBytes = 0;
+    let videoCount = 0;
+    let pptxCount = 0;
+    let pdfCount = 0;
+    for (const p of list) {
+      for (const it of p.items) {
+        if (it.size != null) totalBytes += it.size;
+        if (it.kind === "video_mp4") videoCount += 1;
+        else if (it.kind === "deck_pptx") pptxCount += 1;
+        else if (it.kind === "source_pdf") pdfCount += 1;
+      }
+    }
+    return {
+      total: list.length,
+      videoCount,
+      pptxCount,
+      pdfCount,
+      totalBytes,
+    };
+  }, [data]);
+
   return (
     <div className="mx-auto max-w-screen-xl px-5 py-8 space-y-6">
-      <header className="flex items-end justify-between gap-4">
-        <div>
-          <h1>文件管理</h1>
-          <p className="mt-1 text-sm text-fg-muted">
-            按论文展示已生成的 PPT、视频与原文 PDF。删除会从磁盘移除文件，但任务记录与流水线状态保留。
-          </p>
-        </div>
-        <span className="text-xs text-fg-muted whitespace-nowrap">
-          共 {data?.length ?? 0} 篇 · 显示 {filtered.length}
-        </span>
+      <header>
+        <h1>文件管理</h1>
+        <p className="mt-1 text-sm text-fg-muted">
+          按论文展示已生成的 PPT、视频与原文 PDF。删除会从磁盘移除文件，但任务记录与流水线状态保留。
+        </p>
       </header>
 
-      <div className="relative max-w-md">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted/70" />
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="搜索 paper_id / 文件名 / 标题"
-          className="pl-8"
+      <StatRow>
+        <StatItem
+          icon={Folders}
+          value={stats.total}
+          label="任务总数"
+          hint={`原文 PDF ${stats.pdfCount} 份`}
         />
+        <StatItem
+          icon={Film}
+          value={stats.videoCount}
+          label="视频成品"
+          hint="output/ 目录"
+          tone="success"
+        />
+        <StatItem
+          icon={Presentation}
+          value={stats.pptxCount}
+          label="演示 PPT"
+          hint="review/ 目录"
+          tone="accent"
+        />
+        <StatItem
+          icon={HardDrive}
+          value={formatBytes(stats.totalBytes)}
+          label="累计存储"
+          hint="包含原文 / PPT / 视频"
+        />
+      </StatRow>
+
+      <div className="flex items-center justify-between gap-3">
+        <div className="relative flex-1 max-w-md">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-muted/70" />
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="搜索 paper_id / 文件名 / 标题"
+            className="pl-8"
+          />
+        </div>
+        {query && (
+          <span className="text-xs text-fg-muted whitespace-nowrap">
+            显示 {filtered.length} / {data?.length ?? 0}
+          </span>
+        )}
       </div>
 
       {error && (
@@ -244,7 +301,12 @@ function FileRow({ item }: { item: PaperFileEntry }) {
 
 function formatSize(bytes: number | null): string {
   if (bytes == null) return "—";
-  const units = ["B", "KB", "MB", "GB"];
+  return formatBytes(bytes);
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
   let v = bytes;
   let i = 0;
   while (v >= 1024 && i < units.length - 1) {

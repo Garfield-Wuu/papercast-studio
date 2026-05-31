@@ -20,7 +20,7 @@ export function VoicesPage() {
   return (
     <div className="mx-auto max-w-screen-xl px-5 py-8 space-y-6">
       <header>
-        <h1>音色管理</h1>
+        <h1>语音管理</h1>
         <p className="mt-1 text-sm text-fg-muted">
           浏览 MiniMax 系统音色、试听克隆音色，或者通过下方向导克隆专属音色。本地清单存于
           <code className="px-1 mx-0.5 rounded bg-surface-2 font-mono text-xs">config/voices.json</code>

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { Cpu, Server, Mic, Key, Save, Undo2, Eye, EyeOff, CheckCircle2, XCircle, Film, Loader2 } from "lucide-react";
+import { Cpu, Server, Mic, Key, Save, Undo2, Eye, EyeOff, CheckCircle2, XCircle, Film, Loader2, ShieldCheck, FolderTree, Package } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
+import { StatItem, StatRow } from "@/components/ui/StatItem";
 import { useConfig, useUpdateConfig, useValidateConfig, type ConfigView, type ConfigUpdate } from "@/hooks/useConfig";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -41,7 +42,7 @@ interface SecretDraft {
 }
 
 interface Draft {
-  llm: { reader: LlmRoleDraft; author: LlmRoleDraft; vision: LlmRoleDraft };
+  llm: { reader: LlmRoleDraft; author: LlmRoleDraft };
   tts: TtsDraft;
   video: VideoDraft;
   /** Keyed by env-var name (e.g. "ANTHROPIC_API_KEY"). */
@@ -85,7 +86,6 @@ function draftFromCfg(cfg: ConfigView): Draft {
     llm: {
       reader: llmFromCfg(cfg.llm.reader),
       author: llmFromCfg(cfg.llm.author),
-      vision: llmFromCfg(cfg.llm.vision ?? cfg.llm.reader),
     },
     tts: ttsFromCfg(cfg),
     video: videoFromCfg(cfg),
@@ -118,7 +118,6 @@ function buildUpdateBody(d: Draft): ConfigUpdate {
     llm: {
       reader: llmDump(d.llm.reader),
       author: llmDump(d.llm.author),
-      vision: llmDump(d.llm.vision),
     },
     tts: { ...d.tts },
     video: { ...d.video },
@@ -201,9 +200,9 @@ export function SettingsPage() {
     <div className="mx-auto max-w-screen-lg px-5 py-8 space-y-8">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1>设置</h1>
+          <h1>配置</h1>
           <p className="mt-1 text-sm text-fg-muted">
-            配置 LLM / TTS / 视频参数与密钥。所有更改保存到 config/config.yaml 与 config/secrets.env，下一次请求即生效。
+            管理 LLM / TTS / 视频参数与密钥。所有更改写入 config/config.yaml 与 config/secrets.env，下一次请求即生效。
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -222,30 +221,120 @@ export function SettingsPage() {
         </div>
       </header>
 
+      {/* Overview stats — quick glance at how many roles + secrets + dependencies are configured. */}
+      {(() => {
+        const llmKeysSet = (["reader", "author"] as const).filter(
+          (r) => cfg.llm[r]?.api_key_set,
+        ).length;
+        const ttsVoice = String(cfg.tts?.voice ?? "—");
+        const depsTotal = health?.dependencies.length ?? 0;
+        const depsOk = health?.dependencies.filter((d) => d.ok).length ?? 0;
+        const fingerprintCount = Object.entries(cfg.secrets_fingerprint).filter(
+          ([, v]) => v && v !== "unset",
+        ).length;
+        return (
+          <StatRow>
+            <StatItem
+              icon={Cpu}
+              value={`${llmKeysSet} / 2`}
+              label="LLM 角色已配置"
+              hint="Reader + Author"
+              tone={llmKeysSet === 2 ? "success" : "warning"}
+            />
+            <StatItem
+              icon={Mic}
+              value={ttsVoice}
+              label="TTS 默认音色"
+              hint={`语速 ${cfg.tts?.speed ?? "—"}`}
+              tone="accent"
+            />
+            <StatItem
+              icon={ShieldCheck}
+              value={fingerprintCount}
+              label="密钥已录入"
+              hint="存于 config/secrets.env"
+              tone={fingerprintCount > 0 ? "neutral" : "warning"}
+            />
+            <StatItem
+              icon={Server}
+              value={`${depsOk} / ${depsTotal}`}
+              label="系统依赖就绪"
+              hint={depsOk === depsTotal ? "全部就绪" : "尚有缺失"}
+              tone={depsOk === depsTotal ? "success" : "warning"}
+            />
+          </StatRow>
+        );
+      })()}
+
       {update.error && (
         <div className="rounded border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
           保存失败：{(update.error as Error).message}
         </div>
       )}
 
-      {/* Health */}
-      <Section icon={<Server size={16} />} title="系统依赖">
-        <ul className="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 gap-x-6 text-sm">
-          {health?.dependencies.map((d) => (
-            <li key={d.name} className="flex items-center gap-3">
-              <span
-                className={cn(
-                  "size-2 rounded-full shrink-0",
-                  d.ok ? "bg-success" : "bg-warning",
-                )}
-              />
-              <span className="font-mono text-xs text-fg w-28 shrink-0">{d.name}</span>
-              <span className="text-xs text-fg-muted truncate flex-1" title={d.detail || ""}>
-                {d.detail || (d.ok ? "ok" : "未配置")}
+      {/* System info — version + dependencies + workspace paths */}
+      <Section icon={<Server size={16} />} title="系统信息">
+        <div className="space-y-4">
+          {/* Version + summary */}
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
+            <span className="text-fg-muted">
+              papercast 版本：<span className="text-fg font-mono">{health?.version ?? "—"}</span>
+            </span>
+            <span className="text-fg-muted">
+              状态：
+              <span className={cn(
+                "ml-1",
+                health?.status === "ok" ? "text-success" : "text-warning",
+              )}>
+                {health?.status === "ok" ? "全部就绪" : "降级运行"}
               </span>
-            </li>
-          ))}
-        </ul>
+            </span>
+          </div>
+
+          {/* Dependencies */}
+          <div>
+            <div className="text-xs text-fg-muted mb-1.5 flex items-center gap-1.5">
+              <Package size={12} />
+              依赖检查
+            </div>
+            <ul className="grid grid-cols-1 sm:grid-cols-2 gap-y-1.5 gap-x-6 text-sm">
+              {health?.dependencies.map((d) => (
+                <li key={d.name} className="flex items-center gap-3">
+                  <span
+                    className={cn(
+                      "size-2 rounded-full shrink-0",
+                      d.ok ? "bg-success" : "bg-warning",
+                    )}
+                  />
+                  <span className="font-mono text-xs text-fg w-28 shrink-0">{d.name}</span>
+                  <span className="text-xs text-fg-muted truncate flex-1" title={d.detail || ""}>
+                    {d.detail || (d.ok ? "ok" : "未配置")}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Workspace paths */}
+          {Object.keys(cfg.paths).length > 0 && (
+            <div>
+              <div className="text-xs text-fg-muted mb-1.5 flex items-center gap-1.5">
+                <FolderTree size={12} />
+                工作目录
+              </div>
+              <ul className="grid grid-cols-1 sm:grid-cols-2 gap-y-1 gap-x-6 text-xs">
+                {Object.entries(cfg.paths).map(([k, v]) => (
+                  <li key={k} className="flex items-baseline gap-2 min-w-0">
+                    <span className="text-fg-muted shrink-0 w-20 font-mono">{k}</span>
+                    <span className="text-fg font-mono truncate" title={String(v)}>
+                      {String(v)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       </Section>
 
       {/* LLM */}
@@ -266,7 +355,7 @@ export function SettingsPage() {
       >
         <details className="rounded border border-border bg-surface-2/40 mb-3">
           <summary className="px-3 py-2 cursor-pointer text-xs text-fg-muted select-none flex items-center justify-between">
-            <span>Reader / Author / Vision 角色说明（点击展开）</span>
+            <span>Reader / Author 角色说明（点击展开）</span>
             <span className="text-fg-muted/60">？</span>
           </summary>
           <div className="px-3 pb-3 pt-1 text-xs text-fg-muted leading-relaxed space-y-2">
@@ -282,17 +371,13 @@ export function SettingsPage() {
               两个阶段。Planner 基于 reading + figures + 模板 schema 规划 13 页 PPT；Scripter 基于 slides_plan + reading 写 13 段口播讲稿（90-160 字、学术汇报口吻）。一篇约
               <span className="text-fg"> 12-20K tokens</span>，建议 max_tokens=8000。
             </p>
-            <p>
-              <strong className="text-fg">Vision（视觉，实验性）</strong>：预留给后续「图像驱动切图」实验 — 把单页 PDF 渲染成 PNG 喂给视觉模型，让模型直接输出图表 bbox，再去切图，准确率可能高于现行的 caption-based 方案。
-              <span className="text-warning"> 当前流水线尚未接入此角色</span>，本设置仅占位 + 测试连通性，方便切换流水线时无需先回来配置。建议选 Qwen-VL / Claude Sonnet vision / GPT-4o 等多模态模型。
-            </p>
             <p className="text-fg-muted/80">
-              三个角色可以用同一个 provider（同一个 key），也可以拆开 — 例如 Reader 用 Claude，Author 用 DeepSeek 控制成本，Vision 用 Qwen-VL。
+              两个角色可以用同一个 provider（同一个 key），也可以拆开 — 例如 Reader 用 Claude，Author 用 DeepSeek 控制成本。切图阶段（figures_split）由本地 PDF 结构提取完成（visual_cluster），不需要多模态能力。
             </p>
           </div>
         </details>
-        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-          {(["reader", "author", "vision"] as const).map((role) => (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {(["reader", "author"] as const).map((role) => (
             <LlmRoleCard
               key={role}
               role={role}
@@ -432,7 +517,7 @@ function LlmRoleCard({
   onChange,
   onSecretChange,
 }: {
-  role: "reader" | "author" | "vision";
+  role: "reader" | "author";
   value: LlmRoleDraft;
   fingerprint: string | undefined;
   secretDraft: SecretDraft | null;
@@ -463,14 +548,7 @@ function LlmRoleCard({
   return (
     <div className="rounded-lg border border-border bg-surface-2 p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-fg uppercase tracking-wide text-xs flex items-center gap-2">
-          {role}
-          {role === "vision" && (
-            <span className="rounded bg-warning/15 text-warning text-[10px] px-1.5 py-0.5 normal-case tracking-normal font-normal">
-              实验性·未接入流水线
-            </span>
-          )}
-        </span>
+        <span className="font-medium text-fg uppercase tracking-wide text-xs">{role}</span>
         <RoleStatusPill keySet={Boolean(keySet)} probe={probeStatus} />
       </div>
 

@@ -60,7 +60,6 @@ def health(cfg: Config = Depends(get_cfg)) -> HealthResponse:
         _check_soffice(),
         _check_llm_key("reader", cfg.llm.reader.api_key_env, cfg.llm.reader.api_key),
         _check_llm_key("author", cfg.llm.author.api_key_env, cfg.llm.author.api_key),
-        _check_llm_key("vision", cfg.llm.vision.api_key_env, cfg.llm.vision.api_key),
         _check_minimax_key(),
     ]
     overall = "ok" if all(d.ok for d in deps if d.name in {"ffmpeg", "soffice"}) else "degraded"

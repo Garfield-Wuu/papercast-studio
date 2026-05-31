@@ -1,6 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, NavLink } from "react-router-dom";
-import { Moon, Sun, Activity } from "lucide-react";
+import {
+  Moon,
+  Sun,
+  Activity,
+  Library,
+  Folders,
+  Mic2,
+  Sliders,
+  type LucideIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useTheme } from "@/hooks/useTheme";
 import { api } from "@/lib/api";
@@ -8,6 +17,19 @@ import { cn } from "@/lib/cn";
 import type { components } from "@/lib/api.gen";
 
 type HealthResponse = components["schemas"]["HealthResponse"];
+
+interface NavSpec {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+}
+
+const NAV: NavSpec[] = [
+  { to: "/", label: "工作区", icon: Library },
+  { to: "/files", label: "文件管理", icon: Folders },
+  { to: "/voices", label: "语音管理", icon: Mic2 },
+  { to: "/settings", label: "配置", icon: Sliders },
+];
 
 /**
  * Fixed top header — logo / nav / health indicator / theme toggle.
@@ -37,10 +59,11 @@ export function Header() {
         </Link>
 
         <nav className="flex items-center gap-1">
-          <NavItem to="/">任务</NavItem>
-          <NavItem to="/files">文件</NavItem>
-          <NavItem to="/voices">音色</NavItem>
-          <NavItem to="/settings">设置</NavItem>
+          {NAV.map((item) => (
+            <NavItem key={item.to} to={item.to} icon={item.icon}>
+              {item.label}
+            </NavItem>
+          ))}
         </nav>
 
         <span className="ml-auto" />
@@ -60,20 +83,29 @@ export function Header() {
   );
 }
 
-function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
+function NavItem({
+  to,
+  icon: Icon,
+  children,
+}: {
+  to: string;
+  icon: LucideIcon;
+  children: React.ReactNode;
+}) {
   return (
     <NavLink
       to={to}
       end={to === "/"}
       className={({ isActive }) =>
         cn(
-          "px-3 h-9 inline-flex items-center rounded text-sm transition-colors",
+          "px-3 h-9 inline-flex items-center gap-1.5 rounded text-sm transition-colors",
           isActive
             ? "bg-accent-soft text-accent"
             : "text-fg-muted hover:text-fg hover:bg-surface-2",
         )
       }
     >
+      <Icon size={14} />
       {children}
     </NavLink>
   );

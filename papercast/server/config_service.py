@@ -46,7 +46,6 @@ def view_for(cfg: Config) -> ConfigView:
         llm={
             "reader": _llm_target_view(cfg.llm.reader),
             "author": _llm_target_view(cfg.llm.author),
-            "vision": _llm_target_view(cfg.llm.vision),
         },
         tts=cfg.tts.model_dump(),
         video=cfg.video.model_dump(),
@@ -221,7 +220,7 @@ def validate_live(cfg: Config) -> dict[str, Any]:
     from papercast.llm.client import LLMError, build_provider
 
     results: dict[str, Any] = {}
-    for role in ("reader", "author", "vision"):
+    for role in ("reader", "author"):
         target = getattr(cfg.llm, role)
         spec = target.to_spec()
         if spec.resolved_api_key() is None:

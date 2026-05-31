@@ -186,7 +186,7 @@ and the panel collapses naturally on the next `paper` query refetch.
 * One card per paper, listing the source PDF (from `archive/`), the assembled deck PPTX (from `review/<pid>/`), and the published video MP4 (from `output/`). Pipeline-internal artifacts are no longer browsable from this surface.
 * Each row has 下载 / 在系统中打开 / 删除. Delete only acts on `output/` and `archive/` — work/review/ are protected at the API layer.
 * Search filter on `paper_id` / 文件名 / 标题; stage chip lets the reviewer skim the queue.
-* Uploads happen on the 任务 page (`UploadDropzone`), not here — single source of truth for the upload flow.
+* Uploads happen on the 工作区 page (`UploadDropzone`), not here — single source of truth for the upload flow.
 
 ### `/voices` — voice catalogue + clone wizard (P8)
 * **Top — `VoiceList`**: merges MiniMax system voices (~75 entries from `lib/minimax-voices.ts`, narrowed to 中文/English) with the user's local clones (from `config/voices.json`). Filter Tabs: 全部 / 中文 / English / 我的克隆. Inline 试听 hits `POST /api/voice/preview` — works for system voices too, since MiniMax's preview endpoint accepts public voice_ids; UI reminds the user it costs a few tokens. 移除 only appears on cloned rows.
@@ -197,8 +197,7 @@ and the panel collapses naturally on the next `paper` query refetch.
 * Wizard supports 上一步/下一步, with "重新开始" wiping all state including the recorder canvas.
 
 ### `/settings` — editable config
-* Per-role LLM cards (Reader / Author / Vision). The Provider dropdown is mirrored from `papercast.llm.client.PRESETS` in `lib/llm-presets.ts` — picking a preset auto-fills `provider`, `base_url`, `api_key_env` and offers `model_examples` via a `<datalist>`.
-* **Vision role is reserved for an upcoming experiment** — feeding rendered PDF pages to a multimodal model so it returns figure/table bounding boxes directly. The pipeline does not consume `cfg.llm.vision` yet; the card carries a 实验性 tag and shows the connectivity check works the same as the other roles, so users can pre-configure (e.g. Qwen-VL) before the swap lands.
+* Per-role LLM cards (Reader / Author). The Provider dropdown is mirrored from `papercast.llm.client.PRESETS` in `lib/llm-presets.ts` — picking a preset auto-fills `provider`, `base_url`, `api_key_env` and offers `model_examples` via a `<datalist>`.
 * API Key uses a password input with show/hide toggle. Values entered there are sent as the `secrets` map on `PUT /api/config`, which writes them to `config/secrets.env` atomically (never round-tripped through `ConfigView`).
 * TTS / Video are simple field grids; Secrets fingerprint section shows redacted values and lets you clear individual entries.
 * 测试连通性 calls `POST /api/config/validate` and renders per-role status pills + detail.
