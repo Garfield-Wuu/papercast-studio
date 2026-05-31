@@ -131,7 +131,15 @@ def test_preview_voice_rejects_empty_text() -> None:
         preview_voice(client, text="   ", voice_id="v1")
 
 
-def test_preview_voice_rejects_invalid_voice_id() -> None:
+def test_preview_voice_accepts_lenient_voice_id() -> None:
+    """preview_voice is lenient — MiniMax system voices use hyphens,
+    parens, and spaces. Strict naming only applies to clone registration."""
+    client = _StubClient()
+    out = preview_voice(client, text="hello", voice_id="male-qn-badao")
+    assert out  # stub returns canned bytes; no exception is the point
+
+
+def test_preview_voice_rejects_empty_voice_id() -> None:
     client = _StubClient()
     with pytest.raises(ValueError):
-        preview_voice(client, text="hello", voice_id="bad-id")
+        preview_voice(client, text="hello", voice_id="   ")

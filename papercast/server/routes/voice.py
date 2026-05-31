@@ -278,9 +278,18 @@ def delete_voice(voice_id: str, request: Request) -> dict[str, str]:
 
 
 def _build_author_provider(cfg: Config):
-    """Build the Author LLM provider. Lifted out so tests can monkey-patch."""
+    """Build the Author LLM provider scoped for the clone-script use case.
+
+    800 chinese chars ≈ 1500-2000 tokens, well under the global 8000-token
+    default. Cap max_tokens here so the request returns faster and burns
+    less quota. Tests monkey-patch this whole function so the cap doesn't
+    interfere with their stub provider.
+    """
+    from dataclasses import replace
     from papercast.llm.client import build_provider
-    return build_provider(cfg.llm.author.to_spec())
+    spec = cfg.llm.author.to_spec()
+    spec = replace(spec, max_tokens=2500)
+    return build_provider(spec)
 
 
 @router.post("/script", response_model=ScriptResponse)

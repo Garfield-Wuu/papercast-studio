@@ -157,10 +157,28 @@ def test_preview_returns_mp3_bytes(
     assert _patch_minimax_client.previews[0]["text"] == "试听一下"
 
 
-def test_preview_rejects_invalid_voice_id(client: TestClient) -> None:
+def test_preview_accepts_minimax_system_voice_id(
+    client: TestClient, _patch_minimax_client: _StubClient,
+) -> None:
+    """P8 fix: system voice ids like `male-qn-badao` (hyphen) and
+    `Chinese (Mandarin)_News_Anchor` (parens + space) must pass — the
+    strict naming rule only applies when registering a new clone."""
     r = client.post(
         "/api/voice/preview",
-        json={"text": "x", "voice_id": "1bad"},
+        json={"text": "你好", "voice_id": "male-qn-badao"},
+    )
+    assert r.status_code == 200, r.text
+    r2 = client.post(
+        "/api/voice/preview",
+        json={"text": "hello", "voice_id": "Chinese (Mandarin)_News_Anchor"},
+    )
+    assert r2.status_code == 200, r2.text
+
+
+def test_preview_rejects_empty_voice_id(client: TestClient) -> None:
+    r = client.post(
+        "/api/voice/preview",
+        json={"text": "x", "voice_id": "   "},
     )
     assert r.status_code == 400
 
@@ -217,9 +235,9 @@ class _StubAuthorProvider:
         return self._text
 
 
-def _stub_text(length: int = 1000) -> str:
-    """Build a 1000-char ascii-as-cn body so it lands in the validator's
-    accepted range without requiring a real LLM."""
+def _stub_text(length: int = 800) -> str:
+    """Build a Chinese body of `length` chars so it lands in the
+    validator's accepted range without requiring a real LLM."""
     base = "今天我想分享一篇相关工作的研究。" * 1000
     return base[:length]
 
@@ -227,7 +245,7 @@ def _stub_text(length: int = 1000) -> str:
 def test_generate_script_returns_text(
     client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sample = _stub_text(1000)
+    sample = _stub_text(800)
     monkeypatch.setattr(
         "papercast.server.routes.voice._build_author_provider",
         lambda _cfg: _StubAuthorProvider(sample),
@@ -236,7 +254,25 @@ def test_generate_script_returns_text(
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["text"] == sample
-    assert body["char_count"] == 1000
+    assert body["char_count"] == 800
+
+
+def test_generate_script_trims_oversized_response(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the model overshoots the 1000-char cap, the route trims at a
+    sentence boundary and returns the trimmed text — no 502."""
+    overlong = _stub_text(1500)
+    monkeypatch.setattr(
+        "papercast.server.routes.voice._build_author_provider",
+        lambda _cfg: _StubAuthorProvider(overlong),
+    )
+    r = client.post("/api/voice/script", json={"keywords": ["NLP"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["char_count"] <= 1000
+    # Trimmed at a 。 boundary, not mid-word.
+    assert body["text"].endswith("。")
 
 
 def test_generate_script_validates_keyword_count(client: TestClient) -> None:
@@ -261,7 +297,7 @@ def test_generate_script_502_when_llm_returns_garbage(
     )
     r = client.post("/api/voice/script", json={"keywords": ["NLP"]})
     assert r.status_code == 502
-    assert "out of range" in r.json()["detail"]
+    assert "too short" in r.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

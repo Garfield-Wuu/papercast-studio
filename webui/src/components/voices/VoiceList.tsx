@@ -112,6 +112,11 @@ export function VoiceList() {
   );
 }
 
+const DEFAULT_PREVIEW_TEXT: Record<MergedRow["language"], string> = {
+  "zh-CN": "大家好，这里是论文播报。今天给大家介绍一篇有趣的工作。",
+  "en": "Hello and welcome to PaperCast. Today we'll walk through a recent paper that caught my attention.",
+};
+
 function Row({
   row,
   expanded,
@@ -123,7 +128,7 @@ function Row({
 }) {
   const del = useDeleteVoice();
   const preview = usePreviewVoice();
-  const [text, setText] = useState("大家好，这里是论文播报。今天给大家介绍一篇有趣的工作。");
+  const [text, setText] = useState(() => DEFAULT_PREVIEW_TEXT[row.language]);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
 
   // Cleanup blob on unmount or replacement.

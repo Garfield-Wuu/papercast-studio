@@ -282,7 +282,7 @@ function ScriptStep({
   };
 
   const charCount = text.length;
-  const inRange = charCount >= 950 && charCount <= 1050;
+  const inRange = charCount >= 750 && charCount <= 950;
 
   return (
     <div className="space-y-3">
@@ -301,7 +301,7 @@ function ScriptStep({
 
         <TabsContent value="keywords" className="mt-3 space-y-2">
           <p className="text-xs text-fg-muted">
-            输入 1–8 个研究领域关键词，Author LLM 将虚构一篇相关工作并写成约 1000 字的组会汇报片段。
+            输入 1–8 个研究领域关键词，Author LLM 将虚构一篇相关工作并写成约 800 字的组会汇报片段。
           </p>
           <Input
             value={keywordText}
@@ -329,7 +329,7 @@ function ScriptStep({
 
         <TabsContent value="paste" className="mt-3">
           <p className="text-xs text-fg-muted mb-2">
-            粘贴你已经准备好的讲稿，或者直接在下方编辑。建议 950-1050 字、纯散文。
+            粘贴你已经准备好的讲稿，或者直接在下方编辑。建议 750-950 字、纯散文。
           </p>
         </TabsContent>
 
@@ -359,7 +359,7 @@ function ScriptStep({
       />
       <div className="flex items-center justify-between text-xs">
         <span className={cn(inRange ? "text-success" : "text-fg-muted")}>
-          {charCount} 字 · 目标 950–1050（4-5 分钟朗读）
+          {charCount} 字 · 目标 750–950（约 4 分钟朗读）
         </span>
         {charCount > 0 && (
           <Button variant="ghost" size="sm" onClick={() => onChange("")}>
@@ -405,14 +405,15 @@ function AudioStep({
   return (
     <div className="space-y-3">
       {scriptText && (
-        <details className="rounded border border-border bg-surface-2">
-          <summary className="px-3 py-2 cursor-pointer text-xs text-fg-muted select-none">
-            朗读用讲稿（点击展开 · {scriptText.length} 字）
-          </summary>
-          <div className="px-3 pb-3 pt-1 text-sm text-fg whitespace-pre-wrap leading-relaxed max-h-60 overflow-y-auto scrollbar-thin">
+        <section className="rounded-lg border border-accent/40 bg-accent-soft/20">
+          <header className="flex items-center justify-between px-4 py-2 border-b border-border/60">
+            <span className="text-sm font-medium text-fg">朗读用讲稿</span>
+            <span className="text-xs text-fg-muted">{scriptText.length} 字</span>
+          </header>
+          <div className="px-5 py-4 text-base text-fg whitespace-pre-wrap leading-loose font-sans max-h-[480px] overflow-y-auto scrollbar-thin">
             {scriptText}
           </div>
-        </details>
+        </section>
       )}
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>

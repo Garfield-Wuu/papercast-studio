@@ -26,6 +26,14 @@ from typing import Any
 # digits, and underscores; max 50 chars" — we mirror that.
 VOICE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,49}$")
 
+# Preview accepts a much wider set: MiniMax's published system voices use
+# names like `male-qn-badao` (hyphen), `Chinese (Mandarin)_News_Anchor`
+# (parens + space + underscore), `Korean_SweetGirl` (mixed case). The
+# strict format only applies when a user is *registering* a new clone.
+# Here we just defend against obvious junk (empty, control chars,
+# absurdly long).
+_PREVIEW_VOICE_ID_MAX = 80
+
 
 class VoiceCloneError(RuntimeError):
     """Raised when the clone pipeline fails after the upload succeeded.
@@ -37,11 +45,34 @@ class VoiceCloneError(RuntimeError):
 
 
 def validate_voice_id(voice_id: str) -> None:
+    """Strict format check — applied when *registering* a new cloned voice.
+
+    The MiniMax voice_clone endpoint rejects ids outside this set, so we
+    fail fast before burning a file upload.
+    """
     if not VOICE_ID_RE.match(voice_id):
         raise ValueError(
             f"invalid voice_id {voice_id!r} — must start with a letter and "
             f"consist of letters, digits, and underscores (≤ 50 chars).",
         )
+
+
+def validate_preview_voice_id(voice_id: str) -> None:
+    """Lenient check — applied when previewing an existing voice.
+
+    MiniMax's system voices use ids like `male-qn-badao` and
+    `Chinese (Mandarin)_News_Anchor` that would fail `VOICE_ID_RE`, so
+    we relax to "non-empty, no control chars, ≤ 80 chars". The actual
+    validity is enforced by MiniMax (404 / base_resp on T2A call).
+    """
+    if not voice_id or not voice_id.strip():
+        raise ValueError("voice_id is required")
+    if len(voice_id) > _PREVIEW_VOICE_ID_MAX:
+        raise ValueError(
+            f"voice_id too long ({len(voice_id)} > {_PREVIEW_VOICE_ID_MAX} chars)",
+        )
+    if any(ord(c) < 32 for c in voice_id):
+        raise ValueError("voice_id contains control characters")
 
 
 def clone_voice(
@@ -96,8 +127,12 @@ def preview_voice(
 
     Truncates `text` to 200 chars defensively — the preview is for
     auditioning a voice, not generating long content.
+
+    Uses the lenient `validate_preview_voice_id` so MiniMax system
+    voices like `male-qn-badao` work; the strict format check is only
+    applied when *registering* a new clone.
     """
-    validate_voice_id(voice_id)
+    validate_preview_voice_id(voice_id)
     if not text or not text.strip():
         raise ValueError("preview text is empty")
     if len(text) > 200:
