@@ -192,7 +192,8 @@ and the panel collapses naturally on the next `paper` query refetch.
 * Bottom: clone form. Validates `voice_id` against `^[A-Za-z][A-Za-z0-9_]{0,49}$`, supports drag-drop of `.mp3 / .wav / .m4a / .ogg`, and warns before submission because each clone consumes MiniMax quota.
 
 ### `/settings` — editable config
-* Per-role LLM cards (Reader / Author). The Provider dropdown is mirrored from `papercast.llm.client.PRESETS` in `lib/llm-presets.ts` — picking a preset auto-fills `provider`, `base_url`, `api_key_env` and offers `model_examples` via a `<datalist>`.
+* Per-role LLM cards (Reader / Author / Vision). The Provider dropdown is mirrored from `papercast.llm.client.PRESETS` in `lib/llm-presets.ts` — picking a preset auto-fills `provider`, `base_url`, `api_key_env` and offers `model_examples` via a `<datalist>`.
+* **Vision role is reserved for an upcoming experiment** — feeding rendered PDF pages to a multimodal model so it returns figure/table bounding boxes directly. The pipeline does not consume `cfg.llm.vision` yet; the card carries a 实验性 tag and shows the connectivity check works the same as the other roles, so users can pre-configure (e.g. Qwen-VL) before the swap lands.
 * API Key uses a password input with show/hide toggle. Values entered there are sent as the `secrets` map on `PUT /api/config`, which writes them to `config/secrets.env` atomically (never round-tripped through `ConfigView`).
 * TTS / Video are simple field grids; Secrets fingerprint section shows redacted values and lets you clear individual entries.
 * 测试连通性 calls `POST /api/config/validate` and renders per-role status pills + detail.

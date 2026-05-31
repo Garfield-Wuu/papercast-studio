@@ -29,6 +29,8 @@ export interface PaperFiles {
   title: string | null;
   stage: string;
   ingested_at: string;
+  /** User-supplied 汇报日期 from the StartPaperDialog. May be null for legacy / un-started papers. */
+  report_date: string | null;
   items: PaperFileEntry[];
 }
 

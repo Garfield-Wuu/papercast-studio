@@ -21,6 +21,55 @@ def test_get_config_returns_view_without_secrets(client: TestClient) -> None:
     assert "api_key_set" in body["llm"]["reader"]
 
 
+def test_get_config_includes_vision_role(client: TestClient) -> None:
+    """P7.2: vision role is surfaced even if the user hasn't configured it.
+    Default is the same shape as reader/author so the WebUI can render its
+    card consistently."""
+    body = client.get("/api/config").json()
+    assert "vision" in body["llm"]
+    vision = body["llm"]["vision"]
+    assert "provider" in vision
+    assert "model" in vision
+    assert "api_key_set" in vision
+
+
+def test_validate_endpoint_includes_vision(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """validate_live should probe vision alongside reader/author. Without a
+    key the response is `{ok: false, detail: ...not set}` — same shape as
+    the other roles."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    body = client.post("/api/config/validate").json()
+    assert "vision" in body["llm"]
+    assert "ok" in body["llm"]["vision"]
+
+
+def test_put_config_round_trips_vision_role(
+    client: TestClient, workspace: Path,
+) -> None:
+    """Saving a vision-only update should persist without touching reader/author."""
+    payload = {
+        "llm": {
+            "vision": {
+                "provider": "openai_compat",
+                "model": "qwen-vl-max",
+                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "api_key_env": "DASHSCOPE_API_KEY",
+                "max_tokens": 4000,
+                "temperature": None,
+                "timeout_sec": 60,
+            }
+        }
+    }
+    r = client.put("/api/config", json=payload)
+    assert r.status_code == 200, r.text
+    on_disk = yaml.safe_load((workspace / "config" / "config.yaml").read_text(encoding="utf-8"))
+    assert on_disk["llm"]["vision"]["model"] == "qwen-vl-max"
+    # reader/author left alone (default values still derivable).
+    assert "vision" in on_disk["llm"]
+
+
 def test_get_config_secrets_fingerprint_redacts_values(
     client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

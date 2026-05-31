@@ -201,6 +201,9 @@ class PaperFiles(BaseModel):
     filename: str
     stage: str
     ingested_at: str
+    # User-supplied 汇报日期 from the StartPaperDialog (P7); None if the
+    # paper was queued before P7 or the user skipped the dialog.
+    report_date: str | None = None
     items: list[PaperFileEntry] = []
 
 
@@ -222,6 +225,7 @@ def list_paper_files(
     tab, but a casual user shouldn't be wading through them.
     """
     from .papers import _title_for as title_for  # avoid circular at import time
+    from ..review_service import load_start_meta
 
     papers = db.list_papers()
     out: list[PaperFiles] = []
@@ -248,12 +252,14 @@ def list_paper_files(
             for mp4 in sorted(output_root.glob(f"*_{pid}.mp4")):
                 items.append(_entry_for("video_mp4", "output", mp4, output_root))
 
+        start_meta = load_start_meta(cfg, pid)
         out.append(PaperFiles(
             paper_id=pid,
             filename=row["filename"],
             title=title_for(cfg, pid),
             stage=row["current_stage"],
             ingested_at=row["ingested_at"],
+            report_date=start_meta.get("report_date"),
             items=items,
         ))
     return out

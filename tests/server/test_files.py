@@ -236,3 +236,29 @@ def test_papers_view_with_artifacts(client: TestClient, workspace: Path) -> None
     for it in row["items"]:
         assert it["root"] in {"archive", "review", "output"}
         assert "size" in it
+    # report_date is None until the user fills the StartPaperDialog.
+    assert row["report_date"] is None
+
+
+def test_papers_view_surfaces_report_date_from_start_meta(
+    client: TestClient, workspace: Path,
+) -> None:
+    """When start_meta.json exists, the per-paper view returns its report_date."""
+    r = client.post(
+        "/api/papers",
+        files={"file": ("paper.pdf", io.BytesIO(b"%PDF-1.4\nfake"), "application/pdf")},
+    )
+    pid = r.json()["paper_id"]
+
+    from papercast.core.config import load
+    from papercast.server.review_service import apply_start_meta
+    cfg = load(workspace / "config" / "config.yaml")
+    apply_start_meta(
+        cfg, pid,
+        report_date="2026年6月15日",
+        reviewer="Wu",
+        major="ML",
+    )
+
+    rows = client.get("/api/files/papers").json()
+    assert rows[0]["report_date"] == "2026年6月15日"

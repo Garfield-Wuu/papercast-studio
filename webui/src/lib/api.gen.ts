@@ -958,6 +958,8 @@ export interface components {
             stage: string;
             /** Ingested At */
             ingested_at: string;
+            /** Report Date */
+            report_date?: string | null;
             /**
              * Items
              * @default []

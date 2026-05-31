@@ -41,7 +41,7 @@ interface SecretDraft {
 }
 
 interface Draft {
-  llm: { reader: LlmRoleDraft; author: LlmRoleDraft };
+  llm: { reader: LlmRoleDraft; author: LlmRoleDraft; vision: LlmRoleDraft };
   tts: TtsDraft;
   video: VideoDraft;
   /** Keyed by env-var name (e.g. "ANTHROPIC_API_KEY"). */
@@ -85,6 +85,7 @@ function draftFromCfg(cfg: ConfigView): Draft {
     llm: {
       reader: llmFromCfg(cfg.llm.reader),
       author: llmFromCfg(cfg.llm.author),
+      vision: llmFromCfg(cfg.llm.vision ?? cfg.llm.reader),
     },
     tts: ttsFromCfg(cfg),
     video: videoFromCfg(cfg),
@@ -114,7 +115,11 @@ function buildUpdateBody(d: Draft): ConfigUpdate {
     secrets[k] = s.value;                    // "" clears
   }
   return {
-    llm: { reader: llmDump(d.llm.reader), author: llmDump(d.llm.author) },
+    llm: {
+      reader: llmDump(d.llm.reader),
+      author: llmDump(d.llm.author),
+      vision: llmDump(d.llm.vision),
+    },
     tts: { ...d.tts },
     video: { ...d.video },
     ...(Object.keys(secrets).length ? { secrets } : {}),
@@ -261,7 +266,7 @@ export function SettingsPage() {
       >
         <details className="rounded border border-border bg-surface-2/40 mb-3">
           <summary className="px-3 py-2 cursor-pointer text-xs text-fg-muted select-none flex items-center justify-between">
-            <span>Reader / Author 角色说明（点击展开）</span>
+            <span>Reader / Author / Vision 角色说明（点击展开）</span>
             <span className="text-fg-muted/60">？</span>
           </summary>
           <div className="px-3 pb-3 pt-1 text-xs text-fg-muted leading-relaxed space-y-2">
@@ -277,13 +282,17 @@ export function SettingsPage() {
               两个阶段。Planner 基于 reading + figures + 模板 schema 规划 13 页 PPT；Scripter 基于 slides_plan + reading 写 13 段口播讲稿（90-160 字、学术汇报口吻）。一篇约
               <span className="text-fg"> 12-20K tokens</span>，建议 max_tokens=8000。
             </p>
+            <p>
+              <strong className="text-fg">Vision（视觉，实验性）</strong>：预留给后续「图像驱动切图」实验 — 把单页 PDF 渲染成 PNG 喂给视觉模型，让模型直接输出图表 bbox，再去切图，准确率可能高于现行的 caption-based 方案。
+              <span className="text-warning"> 当前流水线尚未接入此角色</span>，本设置仅占位 + 测试连通性，方便切换流水线时无需先回来配置。建议选 Qwen-VL / Claude Sonnet vision / GPT-4o 等多模态模型。
+            </p>
             <p className="text-fg-muted/80">
-              两个角色可以用同一个 provider（如同一个 Anthropic key），也可以拆开 — 例如 Reader 用 Claude，Author 用 DeepSeek 控制成本。
+              三个角色可以用同一个 provider（同一个 key），也可以拆开 — 例如 Reader 用 Claude，Author 用 DeepSeek 控制成本，Vision 用 Qwen-VL。
             </p>
           </div>
         </details>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {(["reader", "author"] as const).map((role) => (
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+          {(["reader", "author", "vision"] as const).map((role) => (
             <LlmRoleCard
               key={role}
               role={role}
@@ -423,7 +432,7 @@ function LlmRoleCard({
   onChange,
   onSecretChange,
 }: {
-  role: "reader" | "author";
+  role: "reader" | "author" | "vision";
   value: LlmRoleDraft;
   fingerprint: string | undefined;
   secretDraft: SecretDraft | null;
@@ -454,7 +463,14 @@ function LlmRoleCard({
   return (
     <div className="rounded-lg border border-border bg-surface-2 p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="font-medium text-fg uppercase tracking-wide text-xs">{role}</span>
+        <span className="font-medium text-fg uppercase tracking-wide text-xs flex items-center gap-2">
+          {role}
+          {role === "vision" && (
+            <span className="rounded bg-warning/15 text-warning text-[10px] px-1.5 py-0.5 normal-case tracking-normal font-normal">
+              实验性·未接入流水线
+            </span>
+          )}
+        </span>
         <RoleStatusPill keySet={Boolean(keySet)} probe={probeStatus} />
       </div>
 

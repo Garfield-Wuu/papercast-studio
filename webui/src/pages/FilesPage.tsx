@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   FileText,
-  FileSpreadsheet,
+  Presentation,
   Film,
   Download,
   ExternalLink,
@@ -10,6 +10,7 @@ import {
   Search,
   ArrowRight,
   AlertCircle,
+  CalendarDays,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
@@ -28,7 +29,7 @@ import { cn } from "@/lib/cn";
 
 const KIND_LABELS: Record<PaperFileEntry["kind"], { label: string; icon: LucideIcon }> = {
   source_pdf: { label: "原文 PDF", icon: FileText },
-  deck_pptx: { label: "演示 PPT", icon: FileSpreadsheet },
+  deck_pptx: { label: "演示 PPT", icon: Presentation },
   video_mp4: { label: "视频", icon: Film },
 };
 
@@ -147,6 +148,20 @@ function PaperCard({ paper }: { paper: PaperFiles }) {
           >
             {paper.title || paper.filename}
           </p>
+          <div className="mt-1 flex items-center gap-2 text-[11px] text-fg-muted/80">
+            <CalendarDays size={11} />
+            {paper.report_date ? (
+              <>
+                <span className="text-fg">{paper.report_date}</span>
+                <span className="text-fg-muted/60">汇报</span>
+              </>
+            ) : (
+              <>
+                <span>{formatDate(paper.ingested_at)}</span>
+                <span className="text-fg-muted/60">上传</span>
+              </>
+            )}
+          </div>
         </div>
         <Button asChild variant="ghost" size="sm">
           <Link to={`/papers/${paper.paper_id}`} aria-label={`打开任务 ${paper.paper_id}`}>
@@ -249,6 +264,20 @@ function formatTime(iso: string | null): string {
       day: "2-digit",
       hour: "2-digit",
       minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return "";
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
     });
   } catch {
     return iso;

@@ -57,7 +57,7 @@ OpenAPI / interactive docs:
 | POST  | `/api/papers/{pid}/figures/{figure_id}/replace`        | Overwrite figure PNG bytes with an uploaded image |
 | GET   | `/api/files/roots`                                     | Whitelisted root names (P7: only `output` + `archive`) |
 | GET   | `/api/files`                                           | List files under a root — only `output`/`archive` allowed (P7) |
-| GET   | `/api/files/papers`                                    | Per-paper deliverable view: source PDF + deck PPTX + video MP4 (P7) |
+| GET   | `/api/files/papers`                                    | Per-paper deliverable view: source PDF + deck PPTX + video MP4 + report_date (P7) |
 | GET   | `/api/files/download`                                  | Download a single file (permissive — covers `work/figures` for the Review tab) |
 | POST  | `/api/files/upload`                                    | Upload to `inbox/` only |
 | DELETE| `/api/files`                                           | Delete a path under `output` or `archive` only (P7) |

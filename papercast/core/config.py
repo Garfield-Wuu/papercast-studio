@@ -73,6 +73,14 @@ class LLMTarget(BaseModel):
 class LLM(BaseModel):
     reader: LLMTarget = Field(default_factory=LLMTarget)
     author: LLMTarget = Field(default_factory=LLMTarget)
+    # Reserved slot for the future "image-driven figure split" experiment:
+    # send a rendered page PNG to a vision-capable LLM, ask it for figure/
+    # table bounding boxes, then use those instead of caption-based slicing.
+    # The pipeline does NOT consume `vision` yet — it's surfaced in the
+    # WebUI Settings page so users can configure + test the endpoint
+    # ahead of time. Default-factory means existing yamls without a
+    # `llm.vision` block continue to load.
+    vision: LLMTarget = Field(default_factory=LLMTarget)
 
 
 class TTSPoll(BaseModel):

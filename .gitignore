@@ -63,3 +63,4 @@ webui/.pnpm-approved-builds
 papercast/server/static/
 webui/tsconfig.tsbuildinfo
 webui/.vite/
+webui/logs/
