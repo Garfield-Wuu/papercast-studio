@@ -55,3 +55,9 @@ templates/~$*.pptx
 htmlcov/
 .ruff_cache/
 .mypy_cache/
+
+# --- webui ---
+webui/node_modules/
+webui/dist/
+webui/.pnpm-approved-builds
+papercast/server/static/

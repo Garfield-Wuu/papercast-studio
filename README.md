@@ -239,28 +239,45 @@ ls output/
 
 ## Web UI（HTTP / WebSocket 服务）
 
-P2 阶段提供了 FastAPI 后端，把整条流水线包成 HTTP/WebSocket。前端（P4 起）会
-基于这个后端构建；目前先用 curl / httpie / Swagger UI 直接驱动。
+**P2 后端 + P4 前端骨架已就绪**。可以选择通过浏览器 UI 操作（推荐），或直接用 curl 驱动后端。
 
-### 启动
+### 启动 — 浏览器 UI（dev）
+
+需要两个进程：
 
 ```bash
-# dev 模式（自动重载，info 日志）
+# 1. 后端 FastAPI
 python -m papercast.server --reload --log-level info
+# → http://127.0.0.1:8765
 
-# 生产模式
-python -m papercast.server --port 8765 --log-level warning
+# 2. 前端 Vite（另一个终端）
+cd webui
+npm install        # 仅首次
+npm run dev
+# → http://127.0.0.1:5173
 ```
 
-默认绑定 `127.0.0.1:8765`，从 `config/secrets.env` 加载 API key 到环境，
-读 `config/config.yaml`。
+打开 <http://127.0.0.1:5173> 即可。Vite 会把 `/api/*` 和 `/ws/*` 自动转发到后端 8765。
+
+UI 包含：
+- 任务列表（拖拽上传 PDF）
+- 任务详情（12 阶段进度条 + WebSocket 实时事件流 + 启动/停止/重试）
+- 设置（系统依赖 / LLM provider / secrets fingerprint，只读，编辑能力 P6）
+
+详见 [`docs/FRONTEND.md`](docs/FRONTEND.md)。
+
+### 仅启动后端（用 curl / Swagger）
+
+```bash
+python -m papercast.server --port 8765 --log-level warning
+```
 
 启动后：
 - Swagger UI：<http://127.0.0.1:8765/docs>
 - 健康检查：<http://127.0.0.1:8765/api/health>
 - 详细 API 参考：[`docs/SERVER_API.md`](docs/SERVER_API.md)
 
-### 一行式：上传 + 推进 + 审阅
+### 一行式：上传 + 推进 + 审阅（curl）
 
 ```bash
 PID=$(curl -s -F "file=@./paper.pdf" http://127.0.0.1:8765/api/papers | jq -r .paper_id)
