@@ -61,16 +61,22 @@ webui/
     ├── hooks/
     │   ├── usePapers.ts    # papers list / detail / start/stop/retry/upload/delete
     │   ├── usePaperEvents.ts # /ws/papers/{pid} subscription
+    │   ├── useFiles.ts     # roots / tree / upload / delete / reveal
+    │   ├── useVoices.ts    # voice list / clone / preview / delete
+    │   ├── useConfig.ts    # config GET/PUT + validate
     │   └── useTheme.ts     # localStorage + prefers-color-scheme
     ├── components/
-    │   ├── ui/Button.tsx
+    │   ├── ui/{Button,Card,Input,Tabs,Dialog,Checkbox,CodeEditor}.tsx
     │   ├── layout/Header.tsx
+    │   ├── files/FileTree.tsx
     │   ├── papers/{PaperList,UploadDropzone}.tsx
     │   └── pipeline/{PipelineProgress,EventLog}.tsx
     ├── pages/
     │   ├── PapersPage.tsx       # /
     │   ├── PaperDetailPage.tsx  # /papers/:paperId
-    │   └── SettingsPage.tsx     # /settings
+    │   ├── FilesPage.tsx        # /files       (P6.3)
+    │   ├── VoicesPage.tsx       # /voices      (P6.5)
+    │   └── SettingsPage.tsx     # /settings    (editable, P6.4)
     └── styles/
         ├── tokens.css      # ★ design tokens (light + dark)
         ├── typography.css
@@ -171,6 +177,29 @@ theme (`vs` / `vs-dark` follows `[data-theme]`).
 Note: WebSocket `needs_review` event is what tips the page into
 review mode; once `approve` succeeds the FSM advances to APPROVED
 and the panel collapses naturally on the next `paper` query refetch.
+
+---
+
+## Files / Voices / Settings (P6)
+
+### `/files` — runtime directory browser
+* Left rail lists all whitelisted roots (`inbox`, `archive`, `work`, `review`, `output`, `template`, `template_meta`, `prompts`, `logs`).
+* Center pane is a lazy file tree (`FileTree.tsx`) — directories load children on demand to keep first paint cheap.
+* Selecting a file exposes 下载 / 在新页面打开 / 在系统中打开 / 删除. `archive`, `templates`, `prompts` are read-only; `inbox`, `work`, `review`, `output`, `logs` accept deletes.
+* Drag-and-drop region uploads to `inbox/` regardless of the active root (matches the only whitelisted upload destination on the backend).
+
+### `/voices` — voice catalogue + clone
+* Top: list of locally-known voices from `config/voices.json`. 试听 expands an inline `<audio>` player driven by `POST /api/voice/preview` (returns mp3 bytes; we use a `Blob` URL with cleanup on unmount). 移除 deletes from the local catalogue only — the cloud voice on MiniMax survives.
+* Bottom: clone form. Validates `voice_id` against `^[A-Za-z][A-Za-z0-9_]{0,49}$`, supports drag-drop of `.mp3 / .wav / .m4a / .ogg`, and warns before submission because each clone consumes MiniMax quota.
+
+### `/settings` — editable config
+* Per-role LLM cards (Reader / Author). The Provider dropdown is mirrored from `papercast.llm.client.PRESETS` in `lib/llm-presets.ts` — picking a preset auto-fills `provider`, `base_url`, `api_key_env` and offers `model_examples` via a `<datalist>`.
+* API Key uses a password input with show/hide toggle. Values entered there are sent as the `secrets` map on `PUT /api/config`, which writes them to `config/secrets.env` atomically (never round-tripped through `ConfigView`).
+* TTS / Video are simple field grids; Secrets fingerprint section shows redacted values and lets you clear individual entries.
+* 测试连通性 calls `POST /api/config/validate` and renders per-role status pills + detail.
+* Save / Undo: a single `PUT /api/config` covers `llm`, `tts`, `video`, and `secrets`; undo restores the draft from the cached `useConfig()` query.
+
+---
 
 ## Adding a new page
 

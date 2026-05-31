@@ -38,6 +38,8 @@ export function Header() {
 
         <nav className="flex items-center gap-1">
           <NavItem to="/">任务</NavItem>
+          <NavItem to="/files">文件</NavItem>
+          <NavItem to="/voices">音色</NavItem>
           <NavItem to="/settings">设置</NavItem>
         </nav>
 

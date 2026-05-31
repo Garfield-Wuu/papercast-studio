@@ -8,6 +8,8 @@ import { App } from "./App";
 import { PapersPage } from "@/pages/PapersPage";
 import { PaperDetailPage } from "@/pages/PaperDetailPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { FilesPage } from "@/pages/FilesPage";
+import { VoicesPage } from "@/pages/VoicesPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -26,6 +28,8 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <PapersPage /> },
       { path: "papers/:paperId", element: <PaperDetailPage /> },
+      { path: "files", element: <FilesPage /> },
+      { path: "voices", element: <VoicesPage /> },
       { path: "settings", element: <SettingsPage /> },
     ],
   },

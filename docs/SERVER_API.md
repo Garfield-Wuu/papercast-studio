@@ -60,6 +60,10 @@ OpenAPI / interactive docs:
 | POST  | `/api/files/upload`                                    | Upload to `inbox/` only |
 | DELETE| `/api/files`                                           | Delete a path under a deletable root |
 | POST  | `/api/files/reveal`                                    | Open file manager focused on the file (Win/macOS/Linux) |
+| GET   | `/api/voice/list`                                      | Locally-known cloned voices (`config/voices.json`) |
+| POST  | `/api/voice/clone`                                     | Multipart: audio sample + `voice_id` + optional `label`/`prompt_text` → MiniMax voice clone |
+| POST  | `/api/voice/preview`                                   | JSON `{voice_id, text, speed?, model?}` → mp3 bytes for `<audio>` |
+| DELETE| `/api/voice/{voice_id}`                                | Remove from local catalogue (cloud voice survives) |
 | WS    | `/ws/papers/{pid}`                                     | Subscribe to events for one paper |
 | WS    | `/ws/global`                                           | Subscribe to every event |
 
@@ -136,6 +140,24 @@ curl -X PUT http://127.0.0.1:8765/api/config \
            },
            "secrets": {"DEEPSEEK_API_KEY": "sk-..."}
          }'
+```
+
+### Clone a voice + preview it
+
+```bash
+# 1. Clone (multipart). voice_id must match ^[A-Za-z][A-Za-z0-9_]{0,49}$
+curl -F "voice_id=xhsgarfield1" \
+     -F "label=Garfield 私人复刻" \
+     -F "prompt_text=大家好，欢迎收听" \
+     -F "file=@./samples/garfield_30s.mp3" \
+     http://127.0.0.1:8765/api/voice/clone
+# → {"voice_id":"xhsgarfield1","file_id":...,"label":"...","created_at":"...","model":"speech-2.6-hd"}
+
+# 2. Synchronous preview — returns mp3 bytes
+curl -X POST http://127.0.0.1:8765/api/voice/preview \
+     -H "Content-Type: application/json" \
+     -d '{"voice_id":"xhsgarfield1","text":"测试一下"}' \
+     -o preview.mp3
 ```
 
 ---

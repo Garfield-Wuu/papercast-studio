@@ -239,7 +239,7 @@ ls output/
 
 ## Web UI（HTTP / WebSocket 服务）
 
-**P2 后端 + P4 前端骨架已就绪**。可以选择通过浏览器 UI 操作（推荐），或直接用 curl 驱动后端。
+**P6 完成 — 浏览器闭环，零 CLI 也能跑完整个流水线**。可以选择通过浏览器 UI 操作（推荐），或直接用 curl 驱动后端。
 
 ### 启动 — 浏览器 UI（dev）
 
@@ -259,10 +259,12 @@ npm run dev
 
 打开 <http://127.0.0.1:5173> 即可。Vite 会把 `/api/*` 和 `/ws/*` 自动转发到后端 8765。
 
-UI 包含：
-- 任务列表（拖拽上传 PDF）
-- 任务详情（12 阶段进度条 + WebSocket 实时事件流 + 启动/停止/重试）
-- 设置（系统依赖 / LLM provider / secrets fingerprint，只读，编辑能力 P6）
+UI 包含四个顶层页面：
+- **任务**（`/`）：列表 + 拖拽上传 PDF；详情页有 12 阶段进度条、WebSocket 实时事件流、启动/停止/重试
+- **任务详情** 内置 5 Tab 审阅面板（figures / reading / slides / script / facts），支持 Monaco 在线编辑、勾选式局部重生、approve 后自动进入合成阶段
+- **文件**（`/files`）：浏览所有 runtime 目录（inbox / archive / work / review / output / templates / prompts / logs），下载 / 在系统中打开 / 删除；inbox 支持拖拽上传
+- **音色**（`/voices`）：MiniMax 语音克隆 — 上传 30s 样本生成音色；试听任意音色（输入文本即合成）；本地清单管理
+- **设置**（`/settings`）：可编辑 — Reader / Author 双 LLM 卡片（10 个 provider 预设：Anthropic / OpenAI / DeepSeek / Moonshot / Qwen / 智谱 / Ollama / vLLM / 自定义），TTS / 视频参数，密钥录入（只入 secrets.env 不入 yaml）；一键「测试连通性」
 
 详见 [`docs/FRONTEND.md`](docs/FRONTEND.md)。
 

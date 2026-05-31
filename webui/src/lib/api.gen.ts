@@ -195,6 +195,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/papers/{paper_id}/preview-render": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Render
+         * @description Render the assembled .pptx into PNGs for the Review tab.
+         *
+         *     Idempotent — if `work/<pid>/slides_png/` already has files, those
+         *     are returned. Otherwise LibreOffice runs once (~30s on first call)
+         *     and the result is cached on disk.
+         *
+         *     The route is intentionally separate from the `composed` stage:
+         *     that one renders at a higher DPI for video, and only after
+         *     approval. This one runs at 100 DPI for thumbnails and lets the
+         *     reviewer see the deck before approving.
+         */
+        post: operations["preview_render_api_papers__paper_id__preview_render_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/papers/{paper_id}/figures/{figure_id}/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rerun Figure Route
+         * @description Re-extract a single figure with the current caption detector.
+         *
+         *     Useful after a fix lands (e.g. tightened table-caption regex) so
+         *     the user can refresh one image without redoing figures_split.
+         */
+        post: operations["rerun_figure_route_api_papers__paper_id__figures__figure_id__rerun_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/papers/{paper_id}/figures/{figure_id}/replace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace Figure Route
+         * @description Overwrite a figure's PNG bytes with an uploaded file.
+         *
+         *     The figures.json metadata (filename / bbox / caption) is preserved
+         *     — only the image bytes change. Accepts PNG / JPG / WebP; the
+         *     extension on disk stays whatever figures.json declared.
+         */
+        post: operations["replace_figure_route_api_papers__paper_id__figures__figure_id__replace_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/papers/{paper_id}/artifacts": {
         parameters: {
             query?: never;
@@ -432,6 +508,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/voice/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Voices */
+        get: operations["list_voices_api_voice_list_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/clone": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Clone
+         * @description Multipart: file (audio sample) + voice_id + optional label/prompt_text.
+         *
+         *     Steps:
+         *       1. Validate voice_id format and uniqueness in voices.json
+         *       2. Upload the audio bytes to MiniMax (purpose=voice_clone)
+         *       3. Register the cloned voice
+         *       4. Append to local voices.json
+         */
+        post: operations["clone_api_voice_clone_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview
+         * @description Synchronous T2A — returns mp3 bytes the browser can `<audio>`-play.
+         *
+         *     Reads up to 200 chars; truncated server-side too in
+         *     `papercast.voicer.clone.preview_voice`.
+         */
+        post: operations["preview_api_voice_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/{voice_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Voice
+         * @description Remove a voice from local voices.json. The cloud voice on
+         *     MiniMax stays — re-importing the same voice_id later is the
+         *     recommended path for full removal.
+         */
+        delete: operations["delete_voice_api_voice__voice_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -464,8 +628,29 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** Body_clone_api_voice_clone_post */
+        Body_clone_api_voice_clone_post: {
+            /** Voice Id */
+            voice_id: string;
+            /** Label */
+            label?: string | null;
+            /** Prompt Text */
+            prompt_text?: string | null;
+            /**
+             * Model
+             * @default speech-2.6-hd
+             */
+            model: string;
+            /** File */
+            file: string;
+        };
         /** Body_post_artifact_binary_api_papers__paper_id__artifact__name__upload_post */
         Body_post_artifact_binary_api_papers__paper_id__artifact__name__upload_post: {
+            /** File */
+            file: string;
+        };
+        /** Body_replace_figure_route_api_papers__paper_id__figures__figure_id__replace_post */
+        Body_replace_figure_route_api_papers__paper_id__figures__figure_id__replace_post: {
             /** File */
             file: string;
         };
@@ -478,6 +663,19 @@ export interface components {
         Body_upload_paper_api_papers_post: {
             /** File */
             file: string;
+        };
+        /** CloneResponse */
+        CloneResponse: {
+            /** Voice Id */
+            voice_id: string;
+            /** File Id */
+            file_id: number;
+            /** Label */
+            label: string | null;
+            /** Created At */
+            created_at: string;
+            /** Model */
+            model: string;
         };
         /**
          * ConfigUpdateRequest
@@ -694,6 +892,23 @@ export interface components {
             /** Errors */
             errors?: string[];
         };
+        /** PreviewRequest */
+        PreviewRequest: {
+            /** Text */
+            text: string;
+            /** Voice Id */
+            voice_id: string;
+            /**
+             * Speed
+             * @default 1
+             */
+            speed: number;
+            /**
+             * Model
+             * @default speech-2.6-hd
+             */
+            model: string;
+        };
         /** RegenerateRequest */
         RegenerateRequest: {
             /**
@@ -774,6 +989,24 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VoiceRecord */
+        VoiceRecord: {
+            /** Voice Id */
+            voice_id: string;
+            /** Label */
+            label?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Source File Id */
+            source_file_id?: number | null;
+            /** Prompt Text */
+            prompt_text?: string | null;
+            /**
+             * Model
+             * @default speech-2.6-hd
+             */
+            model: string;
         };
     };
     responses: never;
@@ -1092,6 +1325,111 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_render_api_papers__paper_id__preview_render_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paper_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rerun_figure_route_api_papers__paper_id__figures__figure_id__rerun_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paper_id: string;
+                figure_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_figure_route_api_papers__paper_id__figures__figure_id__replace_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paper_id: string;
+                figure_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_replace_figure_route_api_papers__paper_id__figures__figure_id__replace_post"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1547,6 +1885,125 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_voices_api_voice_list_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceRecord"][];
+                };
+            };
+        };
+    };
+    clone_api_voice_clone_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_clone_api_voice_clone_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloneResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_api_voice_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_voice_api_voice__voice_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                voice_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
                     };
                 };
             };
