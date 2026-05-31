@@ -3,21 +3,19 @@ import { useReducer } from "react";
 /**
  * Cross-tab review state.
  *
- * Per-tab: a Map keyed by the tab's natural identifier
- *   - figures: figure_id (string)
- *   - reading: section name ("methods", "findings", ...)
- *   - slides:  page_no (number)
- *   - script:  page_no (number)
- *   - facts:   fact_card index (number)
- * with `{ checked, feedback }` per item.
+ * P5b layout: 3 tabs.
+ *   figures: keyed by figure_id (string)
+ *   slides:  keyed by page_no (number) — drives BOTH slides_plan and
+ *            script regenerate batches; the UI presents one checkbox
+ *            per page so the reviewer doesn't think about the split.
+ *   facts:   keyed by fact_card index (number) — flagged items go
+ *            into a reading regenerate batch as a `fact_cards` section.
  *
  * `globalFeedback` is the textarea at the bottom of the panel —
  * applied to every regenerate request as a context note.
- *
- * Reducer-based for predictable updates and DevTools-friendly tracing.
  */
 
-export type Tab = "figures" | "reading" | "slides" | "script" | "facts";
+export type Tab = "figures" | "slides" | "facts";
 type ItemKey = string | number;
 
 export interface ReviewItem {
@@ -27,9 +25,7 @@ export interface ReviewItem {
 
 export interface ReviewState {
   figures: Record<string, ReviewItem>;
-  reading: Record<string, ReviewItem>;
   slides: Record<number, ReviewItem>;
-  script: Record<number, ReviewItem>;
   facts: Record<number, ReviewItem>;
   globalFeedback: string;
 }
@@ -43,9 +39,7 @@ type Action =
 
 const empty: ReviewState = {
   figures: {},
-  reading: {},
   slides: {},
-  script: {},
   facts: {},
   globalFeedback: "",
 };
@@ -97,7 +91,7 @@ export function useReviewState() {
     return Object.entries(map)
       .filter(([, v]) => v.checked)
       .map(([key, v]) => ({
-        key: tab === "slides" || tab === "script" || tab === "facts" ? Number(key) : key,
+        key: tab === "slides" || tab === "facts" ? Number(key) : key,
         feedback: v.feedback,
       }));
   };
@@ -116,9 +110,7 @@ export function useReviewState() {
     checkedItems,
     totalChecked:
       checkedCount("figures") +
-      checkedCount("reading") +
       checkedCount("slides") +
-      checkedCount("script") +
       checkedCount("facts"),
   };
 }
