@@ -302,8 +302,10 @@ papercast-studio/
 | **P7** P6 验收修订 | 详情页重排 / Files 收紧到 output+archive / 任务流上传后填封面信息 / 事件流持久化 / Settings 角色说明 / 删 Discord / 50MB 上限 | 验收反馈 1/2/3/4/6/7/8 全部消化 | 1d | ✅ 完成（详见 docs/PLAN_P7_REVISIONS.md） |
 | **P8** 音色页改造 | MiniMax 系统音色清单 + 中英过滤 / 3 步向导：写讲稿（关键词→LLM 生成 / 内置范例 / 粘贴）→录音（在线录 + 5 分钟硬截断 / 上传）→克隆 | 用户从无音色到落地一个克隆音色 < 5 分钟 | 1d | ✅ 完成（VoiceList + CloneWizard + Recorder；后端 /voice/script + webm→mp3 转码；详见 docs/PLAN_P8_VOICES.md） |
 | **P9** 切图升级（Method D） | caption + PDF 结构（嵌入图 + 矢量绘图聚类）替代「caption + 文本块边界」；text_blocks 保留为 fallback；cfg.slides.figure_extractor 开关 | 3 篇真实论文肉眼对比 visual_cluster ≥ text_blocks | 1d | ✅ 完成（详见 docs/PLAN_P9_FIGURES.md + reports/eval_figures.md） |
-| **P10** 可移植打包 | bootstrap/ 脚本 + 嵌入式 Python + ffmpeg portable + 7z release | 在干净的 Windows VM 上解压双击启动可跑 | 1.5d | 🟡 待开始 |
-| **P11** 体验打磨 | 视觉细节 / a11y / 错误兜底 / 引导文案；e2e 测试 | UI 通过 ui-ux-pro-max checklist；Lighthouse > 90 | 1d | 🟡 待开始 |
+| **P9** 切图升级（Method D） | caption + PDF 结构（嵌入图 + 矢量绘图聚类）替代「caption + 文本块边界」；text_blocks 保留为 fallback；cfg.slides.figure_extractor 开关 | 3 篇真实论文肉眼对比 visual_cluster ≥ text_blocks | 1d | ✅ 完成（详见 docs/PLAN_P9_FIGURES.md + reports/eval_figures.md） |
+| **P10** UX 二期 | 待审阅顶层页 / 进度 5 段 + 千分比 / 审阅文案重做 + sticky 操作栏 / 配置高级选项折叠 / TTS+视频 select / 音色我的收藏 + ⭐ toggle | 用户验收 10 项反馈一次性消化 | 1d | ✅ 完成（详见 docs/PLAN_P10_UX.md） |
+| **P11** 可移植打包 | build_release.ps1 主脚本 / start.bat + install.ps1 / Edge App 模式 / 嵌入式 Python + ffmpeg portable / LibreOffice 通过 winget 或 portable zip | 解压 zip → 双击 install.ps1 → 双击 start.bat 一气呵成 | 1d | ✅ 完成（详见 docs/PLAN_P11_BUNDLE.md + docs/RELEASE.md） |
+| **P12** 体验打磨 | 视觉细节 / a11y / 错误兜底 / 引导文案；e2e 测试 | UI 通过 ui-ux-pro-max checklist；Lighthouse > 90 | 1d | 🟡 待开始 |
 
 P3 在实施时与 P2 高度耦合（review_service + regenerate route 必须和后端同生），所以
 P2.5 直接吸收了 P3 的范围；剩下 P4-P8 按原顺序推进。

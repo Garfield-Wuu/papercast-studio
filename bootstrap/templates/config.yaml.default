@@ -1,0 +1,72 @@
+# papercast-studio default configuration.
+#
+# All paths are relative to the directory you run start.bat from. The
+# defaults below match the directory layout the release zip ships with;
+# only edit if you've moved things around.
+#
+# Pipeline-relevant knobs (slides duration, LLM temperatures, etc.) can
+# also be tweaked from the WebUI's 配置 page — that's the recommended
+# workflow for non-developers. Edits there round-trip back to this file.
+
+paths:
+  inbox:    ./inbox
+  archive:  ./archive
+  work:     ./work
+  review:   ./review
+  output:   ./output
+  template: ./templates/lab_template.pptx
+  template_meta: ./templates/lab_template.meta.json
+  prompts:  ./prompts
+  db:       ./logs/papercast.sqlite
+
+llm:
+  reader:
+    # Five-section reading: PDF text + figure captions → reading.json.
+    # Choose any preset on the Settings page or override below manually.
+    provider: anthropic
+    model: claude-sonnet-4-6
+    api_key_env: ANTHROPIC_API_KEY
+    max_tokens: 8000
+    timeout_sec: 120
+  author:
+    # Slides plan + speaking script. Same provider as reader is fine.
+    provider: anthropic
+    model: claude-sonnet-4-6
+    api_key_env: ANTHROPIC_API_KEY
+    max_tokens: 8000
+    timeout_sec: 120
+
+tts:
+  provider: minimax
+  voice: female_warm     # Override per-paper at approval time, or via WebUI.
+  fallback_voice: male_calm
+  speed: 1.0
+  concurrency: 3
+
+video:
+  resolution: 1920x1080
+  fps: 30
+  audio_bitrate: 192k
+  naming: "{date}_{paper_id}.mp4"
+
+slides:
+  target_pages: [12, 15]
+  hard_max_pages: 17
+  hard_min_pages: 10
+  speaking_rate_cpm: 220
+  target_duration_sec: [420, 540]
+  figure_extractor: visual_cluster   # P9: caption + PDF structure (Method D)
+
+scheduler:
+  max_concurrent_papers: 2
+  retry_max: 3
+
+review:
+  notify:
+    channel: discord                   # Hermes-era; ignored in single-machine mode
+    discord_webhook_env: DISCORD_WEBHOOK_PAPERCAST
+    mention: ""
+    include_attachments:
+      - pptx
+      - script
+      - fact_cards
