@@ -31,6 +31,7 @@ from .routes import files as files_route
 from .routes import health as health_route
 from .routes import papers as papers_route
 from .routes import review as review_route
+from .routes import voice as voice_route
 from .routes import ws as ws_route
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ def create_app(*, config_path: str | None = None, cors_origins: list[str] | None
     app.include_router(artifacts_route.router, prefix="/api")
     app.include_router(files_route.router, prefix="/api")
     app.include_router(review_route.router, prefix="/api")
+    app.include_router(voice_route.router, prefix="/api")
     app.include_router(ws_route.router)   # /ws/* — no /api prefix
 
     return app

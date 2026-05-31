@@ -140,3 +140,114 @@ class MiniMaxAPIClient:
             )
             r.raise_for_status()
             return r.json()
+
+    # ------------------------------------------------------------------
+    # Voice cloning surface (P6)
+    #
+    # The API splits cloning into two steps:
+    #   1. POST /v1/files/upload (multipart) with `purpose=voice_clone`
+    #      → returns numeric `file_id` referencing the uploaded audio.
+    #   2. POST /v1/voice_clone (json) with `{file_id, voice_id, ...}`
+    #      → registers the cloned voice; voice_id is the caller-chosen
+    #      string that subsequent T2A calls reference.
+    # ------------------------------------------------------------------
+
+    def upload_clone_audio(
+        self, audio: bytes, filename: str = "sample.mp3",
+        content_type: str = "audio/mpeg",
+    ) -> int:
+        """Upload an audio sample for cloning. Returns numeric file_id."""
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.post(
+                f"{self._base_url}/v1/files/upload",
+                headers=self._auth_headers(),
+                data={"purpose": "voice_clone"},
+                files={"file": (filename, audio, content_type)},
+            )
+            r.raise_for_status()
+            payload = r.json()
+        file_id = payload.get("file", {}).get("file_id") or payload.get("file_id")
+        if file_id is None:
+            base = payload.get("base_resp", {})
+            raise RuntimeError(
+                f"MiniMax upload returned no file_id: status={base.get('status_code')} "
+                f"msg={base.get('status_msg')!r}",
+            )
+        return int(file_id)
+
+    def voice_clone(
+        self, *, file_id: int, voice_id: str,
+        prompt_text: str | None = None,
+        model: str = "speech-2.6-hd",
+    ) -> dict:
+        """Register a cloned voice from an uploaded file_id.
+
+        Returns the raw response dict; useful keys:
+          - input_sensitive: bool — whether the upload contained
+            sensitive content (cloning still proceeds)
+          - base_resp.status_code: 0 on success
+        """
+        body: dict[str, Any] = {
+            "file_id": file_id,
+            "voice_id": voice_id,
+            "model": model,
+        }
+        if prompt_text:
+            body["clone_prompt"] = {
+                "prompt_audio": file_id,
+                "prompt_text": prompt_text,
+            }
+        resp = self._post("/v1/voice_clone", json=body)
+        base = resp.get("base_resp", {})
+        if base.get("status_code") not in (0, None):
+            raise RuntimeError(
+                f"voice_clone failed: status={base.get('status_code')} "
+                f"msg={base.get('status_msg')!r}",
+            )
+        return resp
+
+    def t2a_sync(
+        self, text: str, voice_id: str, *,
+        model: str = "speech-2.6-hd",
+        speed: float = 1.0,
+    ) -> bytes:
+        """Synchronous T2A — returns mp3 bytes directly. Used by the
+        WebUI's voice-preview endpoint where waiting for the async
+        pipeline to roundtrip would be heavy.
+        """
+        body: dict[str, Any] = {
+            "model": model,
+            "text": text,
+            "stream": False,
+            "language_boost": "auto",
+            "voice_setting": {
+                "voice_id": voice_id,
+                "speed": speed,
+                "vol": 1,
+                "pitch": 0,
+            },
+            "audio_setting": {
+                "audio_sample_rate": 32000,
+                "bitrate": 128000,
+                "format": "mp3",
+                "channel": 1,
+            },
+        }
+        with httpx.Client(timeout=self._timeout) as client:
+            r = client.post(
+                f"{self._base_url}/v1/t2a_v2",
+                json=body,
+                headers={**self._auth_headers(), "Content-Type": "application/json"},
+            )
+            r.raise_for_status()
+            payload = r.json()
+        # The sync endpoint returns hex-encoded audio under data.audio.
+        data = payload.get("data") or {}
+        audio_hex = data.get("audio")
+        if not audio_hex:
+            base = payload.get("base_resp", {})
+            raise RuntimeError(
+                f"t2a_sync returned no audio: status={base.get('status_code')} "
+                f"msg={base.get('status_msg')!r}",
+            )
+        return bytes.fromhex(audio_hex)
