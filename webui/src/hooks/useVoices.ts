@@ -113,3 +113,18 @@ export function usePreviewVoice() {
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// /api/voice/script — LLM clone-sample generation (P8)
+// ---------------------------------------------------------------------------
+
+export interface ScriptResponse {
+  text: string;
+  char_count: number;
+}
+
+export function useGenerateScript() {
+  return useMutation<ScriptResponse, Error, { keywords: string[] }>({
+    mutationFn: (body) => api.post<ScriptResponse>("/voice/script", body),
+  });
+}

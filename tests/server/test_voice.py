@@ -198,3 +198,119 @@ def test_delete_removes_local_record(client: TestClient, workspace: Path) -> Non
 def test_delete_404_when_missing(client: TestClient) -> None:
     r = client.delete("/api/voice/nope")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# /api/voice/script — LLM clone-sample generation (P8)
+# ---------------------------------------------------------------------------
+
+
+class _StubAuthorProvider:
+    """Stand-in for an Author LLMProvider that returns a fixed talk-sample."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+        self.last_prompt: str | None = None
+
+    def complete(self, prompt: str) -> str:
+        self.last_prompt = prompt
+        return self._text
+
+
+def _stub_text(length: int = 1000) -> str:
+    """Build a 1000-char ascii-as-cn body so it lands in the validator's
+    accepted range without requiring a real LLM."""
+    base = "今天我想分享一篇相关工作的研究。" * 1000
+    return base[:length]
+
+
+def test_generate_script_returns_text(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sample = _stub_text(1000)
+    monkeypatch.setattr(
+        "papercast.server.routes.voice._build_author_provider",
+        lambda _cfg: _StubAuthorProvider(sample),
+    )
+    r = client.post("/api/voice/script", json={"keywords": ["计算机视觉", "目标检测"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["text"] == sample
+    assert body["char_count"] == 1000
+
+
+def test_generate_script_validates_keyword_count(client: TestClient) -> None:
+    """min_length=1, max_length=8 — pydantic enforces."""
+    r = client.post("/api/voice/script", json={"keywords": []})
+    assert r.status_code == 422
+    r = client.post(
+        "/api/voice/script",
+        json={"keywords": [f"k{i}" for i in range(9)]},
+    )
+    assert r.status_code == 422
+
+
+def test_generate_script_502_when_llm_returns_garbage(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Way-too-short response should be rejected with 502 (not silently
+    handed back to the user)."""
+    monkeypatch.setattr(
+        "papercast.server.routes.voice._build_author_provider",
+        lambda _cfg: _StubAuthorProvider("oops"),
+    )
+    r = client.post("/api/voice/script", json={"keywords": ["NLP"]})
+    assert r.status_code == 502
+    assert "out of range" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# /api/voice/clone webm transcoding (P8)
+# ---------------------------------------------------------------------------
+
+
+def test_clone_webm_gets_transcoded_to_mp3(
+    client: TestClient, _patch_minimax_client: _StubClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Browser MediaRecorder uploads webm; route should ffmpeg-convert
+    before forwarding to MiniMax."""
+    fake_mp3 = b"\xff\xfb-fake-mp3-from-transcode-" + b"\x00" * 50
+
+    def fake_transcode(b: bytes, **_kw: object) -> bytes:
+        assert b == b"WEBMDATA" * 30  # exact upload bytes propagated through
+        return fake_mp3
+
+    monkeypatch.setattr(
+        "papercast.voicer.transcode.webm_to_mp3", fake_transcode,
+    )
+    r = client.post(
+        "/api/voice/clone",
+        data={"voice_id": "voicewebm", "label": "from webm"},
+        files={"file": ("rec.webm", io.BytesIO(b"WEBMDATA" * 30), "audio/webm")},
+    )
+    assert r.status_code == 201, r.text
+    upload = _patch_minimax_client.uploads[0]
+    # Upstream got the transcoded bytes, not the raw webm.
+    assert upload["size"] == len(fake_mp3)
+    assert upload["filename"].endswith(".mp3")
+    assert upload["content_type"] == "audio/mpeg"
+
+
+def test_clone_webm_when_ffmpeg_missing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No ffmpeg → 503 with actionable message."""
+    def boom(*_a: object, **_kw: object) -> bytes:
+        raise FileNotFoundError("ffmpeg not on PATH")
+
+    monkeypatch.setattr(
+        "papercast.voicer.transcode.webm_to_mp3", boom,
+    )
+    r = client.post(
+        "/api/voice/clone",
+        data={"voice_id": "voicewebm2"},
+        files={"file": ("rec.webm", io.BytesIO(b"x" * 100), "audio/webm")},
+    )
+    assert r.status_code == 503
+    assert "ffmpeg" in r.json()["detail"].lower()

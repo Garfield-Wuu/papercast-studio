@@ -300,7 +300,7 @@ papercast-studio/
 | **P5** 审阅面板 | Tab 化审阅 UI（figures/reading/slides/script/facts）+ Monaco + 勾选 + 反馈对话 | 完整 e2e：上传 → 审阅 → 局部重生 → 通过 → 出视频 | 2d | ✅ 完成（详见 docs/PLAN_P5_REVIEW.md） |
 | **P6** 文件管理 + 设置 | 文件树 / 拖拽上传 / API key 配置 / 音色克隆 | 用户只通过 webui 就能完成全部操作，零 CLI | 1d | ✅ 完成（voice 服务 + Files / Voices / Settings 三页；详见 docs/PLAN_P6_USERSERVICE.md） |
 | **P7** P6 验收修订 | 详情页重排 / Files 收紧到 output+archive / 任务流上传后填封面信息 / 事件流持久化 / Settings 角色说明 / 删 Discord / 50MB 上限 | 验收反馈 1/2/3/4/6/7/8 全部消化 | 1d | ✅ 完成（详见 docs/PLAN_P7_REVISIONS.md） |
-| **P8** 音色页改造 | MiniMax 系统音色清单 + 中英过滤 / 4 步引导：关键词→LLM 生成 1000 字稿→在线录音→克隆 | 用户从无音色到落地一个克隆音色 < 5 分钟 | 1d | 🟡 待开始（详见 docs/HANDOFF_P8.md） |
+| **P8** 音色页改造 | MiniMax 系统音色清单 + 中英过滤 / 3 步向导：写讲稿（关键词→LLM 生成 / 内置范例 / 粘贴）→录音（在线录 + 5 分钟硬截断 / 上传）→克隆 | 用户从无音色到落地一个克隆音色 < 5 分钟 | 1d | ✅ 完成（VoiceList + CloneWizard + Recorder；后端 /voice/script + webm→mp3 转码；详见 docs/PLAN_P8_VOICES.md） |
 | **P9** 可移植打包 | bootstrap/ 脚本 + 嵌入式 Python + ffmpeg portable + 7z release | 在干净的 Windows VM 上解压双击启动可跑 | 1.5d | 🟡 待开始 |
 | **P10** 体验打磨 | 视觉细节 / a11y / 错误兜底 / 引导文案；e2e 测试 | UI 通过 ui-ux-pro-max checklist；Lighthouse > 90 | 1d | 🟡 待开始 |
 

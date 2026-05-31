@@ -657,6 +657,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/voice/script": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Generate Script
+         * @description Use the Author LLM to draft a ~1000-char academic-talk sample for
+         *     voice cloning. The user supplies research keywords; the model
+         *     fabricates a plausible related paper and writes the talk.
+         *
+         *     Costs ~4K tokens of the Author provider's quota per call.
+         */
+        post: operations["generate_script_api_voice_script_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1053,6 +1077,21 @@ export interface components {
             root: string;
             /** Path */
             path: string;
+        };
+        /**
+         * ScriptRequest
+         * @description POST /api/voice/script — generate a ~1000-char clone sample.
+         */
+        ScriptRequest: {
+            /** Keywords */
+            keywords: string[];
+        };
+        /** ScriptResponse */
+        ScriptResponse: {
+            /** Text */
+            text: string;
+            /** Char Count */
+            char_count: number;
         };
         /**
          * Stage
@@ -2167,6 +2206,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    generate_script_api_voice_script_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScriptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScriptResponse"];
                 };
             };
             /** @description Validation Error */

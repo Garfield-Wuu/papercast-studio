@@ -263,8 +263,8 @@ UI 包含四个顶层页面：
 - **任务**（`/`）：列表 + 拖拽上传 PDF；详情页有 12 阶段进度条、WebSocket 实时事件流、启动/停止/重试
 - **任务详情** 内置 5 Tab 审阅面板（figures / reading / slides / script / facts），支持 Monaco 在线编辑、勾选式局部重生、approve 后自动进入合成阶段
 - **文件**（`/files`）：浏览所有 runtime 目录（inbox / archive / work / review / output / templates / prompts / logs），下载 / 在系统中打开 / 删除；inbox 支持拖拽上传
-- **音色**（`/voices`）：MiniMax 语音克隆 — 上传 30s 样本生成音色；试听任意音色（输入文本即合成）；本地清单管理
-- **设置**（`/settings`）：可编辑 — Reader / Author 双 LLM 卡片（10 个 provider 预设：Anthropic / OpenAI / DeepSeek / Moonshot / Qwen / 智谱 / Ollama / vLLM / 自定义），TTS / 视频参数，密钥录入（只入 secrets.env 不入 yaml）；一键「测试连通性」
+- **音色**（`/voices`）：浏览 75+ 个 MiniMax 系统音色（中英分组）+ 本地克隆音色合并表，行内试听；3 步克隆向导（关键词→Author LLM 写学术汇报样本 / 内置范例 / 粘贴自带 → 浏览器在线录音 + 5 分钟硬截断 / 文件上传 → 注册）；webm 录音由后端 ffmpeg 自动转 mp3
+- **设置**（`/settings`）：可编辑 — Reader / Author / Vision 三 LLM 卡片（10 个 provider 预设：Anthropic / OpenAI / DeepSeek / Moonshot / Qwen / 智谱 / Ollama / vLLM / 自定义；vision 实验性占位待接入「图像驱动切图」流水线），TTS / 视频参数，密钥录入（只入 secrets.env 不入 yaml）；一键「测试连通性」
 
 详见 [`docs/FRONTEND.md`](docs/FRONTEND.md)。
 

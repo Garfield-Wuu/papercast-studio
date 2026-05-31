@@ -69,12 +69,13 @@ webui/
     │   ├── ui/{Button,Card,Input,Tabs,Dialog,Checkbox,CodeEditor}.tsx
     │   ├── layout/Header.tsx
     │   ├── papers/{PaperList,UploadDropzone,StartPaperDialog}.tsx
-    │   └── pipeline/{PipelineProgress,EventLog,StageHistory}.tsx
+    │   ├── pipeline/{PipelineProgress,EventLog,StageHistory}.tsx
+    │   └── voices/{VoiceList,CloneWizard,Recorder}.tsx
     ├── pages/
     │   ├── PapersPage.tsx       # /
     │   ├── PaperDetailPage.tsx  # /papers/:paperId
     │   ├── FilesPage.tsx        # /files       (P6.3)
-    │   ├── VoicesPage.tsx       # /voices      (P6.5)
+    │   ├── VoicesPage.tsx       # /voices      (P8 wizard)
     │   └── SettingsPage.tsx     # /settings    (editable, P6.4)
     └── styles/
         ├── tokens.css      # ★ design tokens (light + dark)
@@ -187,9 +188,13 @@ and the panel collapses naturally on the next `paper` query refetch.
 * Search filter on `paper_id` / 文件名 / 标题; stage chip lets the reviewer skim the queue.
 * Uploads happen on the 任务 page (`UploadDropzone`), not here — single source of truth for the upload flow.
 
-### `/voices` — voice catalogue + clone
-* Top: list of locally-known voices from `config/voices.json`. 试听 expands an inline `<audio>` player driven by `POST /api/voice/preview` (returns mp3 bytes; we use a `Blob` URL with cleanup on unmount). 移除 deletes from the local catalogue only — the cloud voice on MiniMax survives.
-* Bottom: clone form. Validates `voice_id` against `^[A-Za-z][A-Za-z0-9_]{0,49}$`, supports drag-drop of `.mp3 / .wav / .m4a / .ogg`, and warns before submission because each clone consumes MiniMax quota.
+### `/voices` — voice catalogue + clone wizard (P8)
+* **Top — `VoiceList`**: merges MiniMax system voices (~75 entries from `lib/minimax-voices.ts`, narrowed to 中文/English) with the user's local clones (from `config/voices.json`). Filter Tabs: 全部 / 中文 / English / 我的克隆. Inline 试听 hits `POST /api/voice/preview` — works for system voices too, since MiniMax's preview endpoint accepts public voice_ids; UI reminds the user it costs a few tokens. 移除 only appears on cloned rows.
+* **Bottom — `CloneWizard`** — 3-step state machine driven by `useReducer`:
+    1. **写讲稿**: 3 entry points feed the same textarea — 关键词 (`POST /api/voice/script` ≈ 4K tokens, Author LLM drafts an academic talk) / 粘贴 / 内置范例 (`lib/sample-scripts.ts`). Char counter targets 950–1050 (≈4–5 min reading).
+    2. **录音 / 上传**: `Recorder.tsx` uses `getUserMedia` + `MediaRecorder` (default `audio/webm; codecs=opus`, fallback `audio/mp4`), live waveform via `AnalyserNode`, 5-min hard cap. Or drag-drop a file. Browser-recorded `.webm` is transcoded server-side via ffmpeg to mp3 before MiniMax sees it.
+    3. **注册**: voice_id (regex check against `VOICE_ID_PATTERN`), label, confirm dialog → `POST /api/voice/clone`.
+* Wizard supports 上一步/下一步, with "重新开始" wiping all state including the recorder canvas.
 
 ### `/settings` — editable config
 * Per-role LLM cards (Reader / Author / Vision). The Provider dropdown is mirrored from `papercast.llm.client.PRESETS` in `lib/llm-presets.ts` — picking a preset auto-fills `provider`, `base_url`, `api_key_env` and offers `model_examples` via a `<datalist>`.

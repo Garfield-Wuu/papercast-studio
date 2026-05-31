@@ -63,8 +63,9 @@ OpenAPI / interactive docs:
 | DELETE| `/api/files`                                           | Delete a path under `output` or `archive` only (P7) |
 | POST  | `/api/files/reveal`                                    | Open file manager focused on the file (Win/macOS/Linux) |
 | GET   | `/api/voice/list`                                      | Locally-known cloned voices (`config/voices.json`) |
-| POST  | `/api/voice/clone`                                     | Multipart: audio sample + `voice_id` + optional `label`/`prompt_text` → MiniMax voice clone |
+| POST  | `/api/voice/clone`                                     | Multipart: audio sample (mp3/wav/m4a/ogg/webm) + `voice_id` + optional `label`/`prompt_text` → MiniMax voice clone. webm uploads (browser MediaRecorder) are auto-transcoded to mp3 via ffmpeg before forwarding (P8) |
 | POST  | `/api/voice/preview`                                   | JSON `{voice_id, text, speed?, model?}` → mp3 bytes for `<audio>` |
+| POST  | `/api/voice/script`                                    | JSON `{keywords: list[str]}` → `{text, char_count}`, ~1000-char academic-talk sample drafted by Author LLM for clone wizard (P8) |
 | DELETE| `/api/voice/{voice_id}`                                | Remove from local catalogue (cloud voice survives) |
 | WS    | `/ws/papers/{pid}`                                     | Subscribe to events for one paper |
 | WS    | `/ws/global`                                           | Subscribe to every event |

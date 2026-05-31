@@ -42,12 +42,13 @@ router = APIRouter(prefix="/voice", tags=["voice"])
 
 
 _VOICES_FILENAME = "voices.json"
-_ALLOWED_AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".ogg"}
+_ALLOWED_AUDIO_SUFFIXES = {".mp3", ".wav", ".m4a", ".ogg", ".webm"}
 _AUDIO_MIME = {
     ".mp3": "audio/mpeg",
     ".wav": "audio/wav",
     ".m4a": "audio/mp4",
     ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
 }
 
 
@@ -73,6 +74,16 @@ class PreviewRequest(BaseModel):
     voice_id: str
     speed: float = 1.0
     model: str = "speech-2.6-hd"
+
+
+class ScriptRequest(BaseModel):
+    """POST /api/voice/script — generate a ~1000-char clone sample."""
+    keywords: list[str] = Field(..., min_length=1, max_length=8)
+
+
+class ScriptResponse(BaseModel):
+    text: str
+    char_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -165,14 +176,29 @@ async def clone(
     if not audio:
         raise HTTPException(400, "empty upload")
 
+    upload_filename = file.filename
+    upload_content_type = _AUDIO_MIME[suffix]
+    if suffix == ".webm":
+        # MediaRecorder default; MiniMax doesn't accept it. Transcode to
+        # mp3 server-side using ffmpeg (already a hard dependency).
+        from papercast.voicer.transcode import TranscodeError, webm_to_mp3
+        try:
+            audio = webm_to_mp3(audio)
+        except FileNotFoundError as e:
+            raise HTTPException(503, f"ffmpeg not available: {e}")
+        except TranscodeError as e:
+            raise HTTPException(400, f"audio transcode failed: {e}")
+        upload_filename = f"{Path(file.filename).stem}.mp3"
+        upload_content_type = "audio/mpeg"
+
     client = _build_minimax_client(cfg)
     try:
         result = clone_voice(
             client,
             audio=audio,
             voice_id=voice_id,
-            filename=file.filename,
-            content_type=_AUDIO_MIME[suffix],
+            filename=upload_filename,
+            content_type=upload_content_type,
             prompt_text=prompt_text,
             model=model,
         )
@@ -244,3 +270,51 @@ def delete_voice(voice_id: str, request: Request) -> dict[str, str]:
         raise HTTPException(404, f"voice {voice_id!r} not in local voices.json")
     _save_voices(voices_file, new_records)
     return {"deleted": voice_id}
+
+
+# ---------------------------------------------------------------------------
+# /api/voice/script — LLM-generate a 1000-char sample (P8)
+# ---------------------------------------------------------------------------
+
+
+def _build_author_provider(cfg: Config):
+    """Build the Author LLM provider. Lifted out so tests can monkey-patch."""
+    from papercast.llm.client import build_provider
+    return build_provider(cfg.llm.author.to_spec())
+
+
+@router.post("/script", response_model=ScriptResponse)
+def generate_script(
+    body: ScriptRequest,
+    cfg: Config = Depends(get_cfg),
+) -> ScriptResponse:
+    """Use the Author LLM to draft a ~1000-char academic-talk sample for
+    voice cloning. The user supplies research keywords; the model
+    fabricates a plausible related paper and writes the talk.
+
+    Costs ~4K tokens of the Author provider's quota per call.
+    """
+    from papercast.llm.client import LLMError, LLMNotConfiguredError
+    from papercast.voicer.script_gen import ScriptGenError, generate_clone_script
+
+    try:
+        provider = _build_author_provider(cfg)
+    except LLMNotConfiguredError as e:
+        raise HTTPException(503, f"Author LLM not configured: {e}")
+
+    try:
+        text = generate_clone_script(
+            provider,
+            keywords=list(body.keywords),
+            prompts_dir=cfg.paths.prompts,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except ScriptGenError as e:
+        raise HTTPException(502, f"sample generation failed: {e}")
+    except LLMError as e:
+        raise HTTPException(502, f"LLM call failed: {e}")
+    except Exception as e:  # noqa: BLE001 — surface verbatim
+        raise HTTPException(502, f"unexpected error: {type(e).__name__}: {e}")
+
+    return ScriptResponse(text=text, char_count=len(text))
