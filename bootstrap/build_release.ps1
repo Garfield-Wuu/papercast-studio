@@ -36,7 +36,12 @@ param(
     [string]$Version = ""
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
+# NOTE: We deliberately use Continue, not Stop, at script scope. PowerShell
+# 5.1 wraps native-exe stderr (e.g. pip's "Scripts dir not on PATH" WARNING)
+# into NativeCommandError records, which Stop treats as fatal even when the
+# exe returned 0. With Continue, every cmdlet that must abort the script on
+# failure does so via an explicit `if (...) throw` guard or `-ErrorAction Stop`.
 $ProgressPreference = "SilentlyContinue"   # speeds up Invoke-WebRequest
 
 $Repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -73,7 +78,7 @@ Write-Host ""
 # -----------------------------------------------------------------------------
 # URLs — pinned to known-good versions. Bump deliberately.
 # -----------------------------------------------------------------------------
-$PythonUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20251104/cpython-3.11.13+20251104-x86_64-pc-windows-msvc-install_only.tar.gz"
+$PythonUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20260510/cpython-3.11.15+20260510-x86_64-pc-windows-msvc-install_only.tar.gz"
 $FfmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 
 # -----------------------------------------------------------------------------
@@ -81,6 +86,28 @@ $FfmpegUrl = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
 # -----------------------------------------------------------------------------
 function Ensure-Dir($p) {
     if (-not (Test-Path $p)) { New-Item -ItemType Directory -Path $p -Force | Out-Null }
+}
+
+# PowerShell 5.1 wraps every stderr line from a native exe into a
+# NativeCommandError record, which `$ErrorActionPreference = Stop` then
+# treats as fatal — even when the exe returns 0. Many tools (pip, npm,
+# tar) emit benign stderr WARNINGs by default. Invoke-Native runs the
+# exe with EAP temporarily widened, then promotes a non-zero exit to
+# our own throw so we still abort on real failures.
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory = $true)] [scriptblock] $ScriptBlock,
+        [string] $WhatFor = "native command"
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & $ScriptBlock
+        $rc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($rc -ne 0) { throw "$WhatFor failed (exit $rc)" }
 }
 
 function Download-Cached($url, $dest) {
@@ -97,8 +124,9 @@ function Download-Cached($url, $dest) {
 function Extract-TarGz($archive, $dest) {
     # Windows 10 / 11 ship with `tar` from BSD libarchive — handles tar.gz fine.
     Ensure-Dir $dest
-    & tar -xzf $archive -C $dest
-    if ($LASTEXITCODE -ne 0) { throw "tar -xzf $archive failed" }
+    Invoke-Native -WhatFor "tar -xzf $archive" -ScriptBlock {
+        & tar -xzf $archive -C $dest
+    }
 }
 
 function Extract-Zip($archive, $dest) {
@@ -154,19 +182,54 @@ if (-not (Test-Path $PythonExe)) {
 }
 
 # -----------------------------------------------------------------------------
-# 3. pip-install papercast (with [llm]) into the embedded interpreter.
+# 3. Build the webui frontend (vite output → papercast/server/static).
+#    MUST run before pip install — hatchling reads papercast/server/static/
+#    at wheel-build time via [tool.hatch.build.targets.wheel.force-include].
+# -----------------------------------------------------------------------------
+if (-not $SkipWebui) {
+    Write-Host "[step ] building webui (must precede pip install) ..." -ForegroundColor Cyan
+    Push-Location (Join-Path $Repo "webui")
+    try {
+        if (-not (Test-Path "node_modules")) {
+            Invoke-Native -WhatFor "npm ci" -ScriptBlock { & npm ci }
+        }
+        Invoke-Native -WhatFor "npm run build" -ScriptBlock { & npm run build }
+    } finally {
+        Pop-Location
+    }
+}
+$staticDir = Join-Path $Repo "papercast\server\static"
+if (-not (Test-Path (Join-Path $staticDir "index.html"))) {
+    throw "webui dist missing at $staticDir (run without -SkipWebui first)"
+}
+
+# -----------------------------------------------------------------------------
+# 4. pip-install papercast (with [llm,server]) into the embedded interpreter.
+#    [server] pulls fastapi/uvicorn/python-multipart/websockets — required
+#    by the WebUI runtime. [llm] pulls anthropic SDK.
+#    The wheel built here picks up papercast/server/static/ via the
+#    force-include rule in pyproject.toml.
 # -----------------------------------------------------------------------------
 Write-Host "[step ] installing papercast into embedded Python ..." -ForegroundColor Cyan
-& $PythonExe -m pip install --upgrade pip 2>&1 | Out-Null
-& $PythonExe -m pip install --no-cache-dir "$Repo[llm]"
-if ($LASTEXITCODE -ne 0) { throw "pip install papercast failed" }
-
-# Sanity-check: import papercast in the embedded environment.
-& $PythonExe -c "import papercast; print('papercast', papercast.__version__)"
-if ($LASTEXITCODE -ne 0) { throw "Embedded python cannot import papercast" }
+Invoke-Native -WhatFor "pip self-upgrade" -ScriptBlock {
+    & $PythonExe -m pip install --quiet --disable-pip-version-check --upgrade pip
+}
+Invoke-Native -WhatFor "pip install papercast[llm,server]" -ScriptBlock {
+    & $PythonExe -m pip install --quiet --disable-pip-version-check --no-cache-dir "$Repo[llm,server]"
+}
+# Sanity-check: import papercast from a CWD other than $Repo so the
+# repo's source tree can't shadow the installed wheel via sys.path[0].
+Invoke-Native -WhatFor "import papercast smoke test" -ScriptBlock {
+    Push-Location $env:TEMP
+    try {
+        & $PythonExe -c "import papercast, papercast.server; print('papercast', papercast.__version__, 'from', papercast.__file__)"
+    } finally {
+        Pop-Location
+    }
+}
 
 # -----------------------------------------------------------------------------
-# 4. Pull ffmpeg portable.
+# 5. Pull ffmpeg portable.
 # -----------------------------------------------------------------------------
 $FfmpegStage = Join-Path $Stage "runtime\ffmpeg"
 if (-not $SkipFfmpeg) {
@@ -187,28 +250,6 @@ if (-not $SkipFfmpeg) {
 }
 if (-not (Test-Path (Join-Path $FfmpegStage "bin\ffmpeg.exe"))) {
     throw "ffmpeg.exe missing under $FfmpegStage (try without -SkipFfmpeg)"
-}
-
-# -----------------------------------------------------------------------------
-# 5. Build the webui frontend (vite output → papercast/server/static).
-# -----------------------------------------------------------------------------
-if (-not $SkipWebui) {
-    Write-Host "[step ] building webui ..." -ForegroundColor Cyan
-    Push-Location (Join-Path $Repo "webui")
-    try {
-        if (-not (Test-Path "node_modules")) {
-            & npm ci
-            if ($LASTEXITCODE -ne 0) { throw "npm ci failed" }
-        }
-        & npm run build
-        if ($LASTEXITCODE -ne 0) { throw "npm run build failed" }
-    } finally {
-        Pop-Location
-    }
-}
-$staticDir = Join-Path $Repo "papercast\server\static"
-if (-not (Test-Path (Join-Path $staticDir "index.html"))) {
-    throw "webui dist missing at $staticDir (run without -SkipWebui first)"
 }
 
 # -----------------------------------------------------------------------------
@@ -258,14 +299,17 @@ if (-not $SkipZip) {
     if ($sevenZip) {
         Push-Location $Build
         try {
-            & 7z a -tzip -mx=7 -y $zipPath $ReleaseName | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "7z packaging failed" }
+            Invoke-Native -WhatFor "7z packaging" -ScriptBlock {
+                & 7z a -tzip -mx=7 -y $zipPath $ReleaseName | Out-Null
+            }
         } finally {
             Pop-Location
         }
     } else {
         Write-Host "[info ] 7z not on PATH, falling back to Compress-Archive (slower)" -ForegroundColor DarkYellow
-        Compress-Archive -Path (Join-Path $Stage "*") -DestinationPath $zipPath -CompressionLevel Optimal -Force
+        # Pass the directory itself, not its glob — that way the zip gets a
+        # top-level $ReleaseName/ folder consistent with the 7z branch above.
+        Compress-Archive -Path $Stage -DestinationPath $zipPath -CompressionLevel Optimal -Force
     }
 
     $size = (Get-Item $zipPath).Length / 1MB

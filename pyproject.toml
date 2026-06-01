@@ -56,6 +56,21 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["papercast"]
 
+# webui dist (papercast/server/static/) is gitignored — hatchling honours
+# .gitignore by default, so we must opt the built bundle back in. The
+# release build runs `npm run build` before pip install, so this path is
+# guaranteed populated when the wheel is constructed.
+[tool.hatch.build.targets.wheel.force-include]
+"papercast/server/static" = "papercast/server/static"
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "papercast/**/*.py",
+  "pyproject.toml",
+  "README.md",
+  "LICENSE",
+]
+
 # ---- ruff ----
 [tool.ruff]
 line-length = 100
