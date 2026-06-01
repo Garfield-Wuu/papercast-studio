@@ -103,7 +103,57 @@ def create_app(*, config_path: str | None = None, cors_origins: list[str] | None
     app.include_router(voice_route.router, prefix="/api")
     app.include_router(ws_route.router)   # /ws/* — no /api prefix
 
+    # WebUI: serve the vite-built SPA from papercast/server/static when it
+    # exists. The release build (bootstrap/build_release.ps1) populates this
+    # directory before pip install via hatchling's force-include rule. In
+    # dev (npm run dev) it's absent and we leave / alone — the dev server
+    # serves the SPA on 5173 and proxies /api back here.
+    _mount_spa(app)
+
     return app
+
+
+def _mount_spa(app: FastAPI) -> None:
+    """Mount the built SPA at / with a catch-all fallback so client-side
+    routes (`/dashboard`, `/papers/<id>/review`, ...) reload cleanly without
+    server-side route definitions."""
+    from fastapi.responses import FileResponse, JSONResponse
+    from fastapi.staticfiles import StaticFiles
+
+    static_dir = Path(__file__).parent / "static"
+    index_html = static_dir / "index.html"
+    if not index_html.is_file():
+        logger.info("WebUI bundle not found at %s; skipping / mount (dev mode?)", static_dir)
+        return
+
+    # Serve hashed asset files under /assets/* with long cache.
+    assets_dir = static_dir / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="webui-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def _spa_root() -> FileResponse:
+        return FileResponse(index_html)
+
+    # SPA history-mode fallback: any unmatched non-/api path that asks for
+    # text/html gets index.html so the React Router renders the right view.
+    # Note: function signature stays minimal — FastAPI treats anything other
+    # than path params or known dependencies as required query params.
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _spa_fallback(full_path: str):
+        # Don't shadow API or WebSocket routes. include_router runs before
+        # this catch-all, so /api/* and /ws/* already win — but a typo or
+        # an unknown /api/* still ends up here, where we 404 cleanly
+        # instead of returning HTML to a JSON client.
+        if full_path.startswith(("api/", "ws/")):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        # Static file we serve from /assets/* is already mounted above; if
+        # someone requests a hashed asset that doesn't exist, return 404.
+        target = static_dir / full_path
+        if target.is_file():
+            return FileResponse(target)
+        # Otherwise it's a client-side route — hand back the SPA shell.
+        return FileResponse(index_html)
 
 
 def _summarize_settings(cfg: Any) -> dict[str, Any]:
