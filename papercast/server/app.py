@@ -54,7 +54,7 @@ async def _lifespan(app: FastAPI):  # noqa: D401 — context manager
     # nothing was injected, build the real one wired to the CLI runners.
     if getattr(app.state, "orchestrator", None) is None:
         from .jobs import JobOrchestrator
-        app.state.orchestrator = JobOrchestrator(cfg=cfg, db=db, bus=bus)
+        app.state.orchestrator = JobOrchestrator(cfg=lambda: app.state.cfg, db=db, bus=bus)
 
     logger.info("papercast server started (version=%s, db=%s)", __version__, cfg.paths.db)
     try:

@@ -131,7 +131,11 @@ def write_config(req: ConfigUpdateRequest, cfg_path: Path, secrets_path: Path) -
 
     if req.secrets:
         _write_secrets(secrets_path, req.secrets)
+        # Update os.environ immediately so the live process sees the new keys
+        # without a restart. Also reload the full secrets.env so any keys that
+        # were added manually (outside the WebUI) are picked up at the same time.
         os.environ.update({k: v for k, v in req.secrets.items() if v})
+        _reload_secrets_env(secrets_path)
 
     return new_cfg
 
@@ -169,6 +173,24 @@ def _atomic_write_text(path: Path, content: str) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def _reload_secrets_env(path: Path) -> None:
+    """Re-read secrets.env into os.environ, overwriting existing values.
+
+    Called after every PUT /api/config so manually-edited keys (added
+    outside the WebUI) are also picked up without a server restart.
+    """
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if k and v:
+            os.environ[k] = v
 
 
 def _write_secrets(path: Path, kv: dict[str, str]) -> None:

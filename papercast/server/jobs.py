@@ -49,6 +49,10 @@ from papercast.core.state import Stage, next_stage
 from .events import EventBus
 from .schemas import StageEvent
 
+# A callable that returns the current Config — lets the orchestrator pick up
+# config changes made via PUT /api/config without a server restart.
+CfgGetter = Callable[[], Config]
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,14 +65,16 @@ class JobOrchestrator:
 
     def __init__(
         self,
-        cfg: Config,
+        cfg: Config | CfgGetter,
         db: Database,
         bus: EventBus,
         *,
         stage_runners: dict[Stage, Callable[[Config, str], None]] | None = None,
         pending_sleep_factory: Callable[[Config], float] | None = None,
     ) -> None:
-        self._cfg = cfg
+        # Accept either a plain Config (tests / legacy) or a getter so the
+        # orchestrator always uses the latest config after PUT /api/config.
+        self._cfg_getter: CfgGetter = cfg if callable(cfg) else (lambda: cfg)  # type: ignore[arg-type]
         self._db = db
         self._bus = bus
         # Late import keeps `papercast.server` importable even when the
@@ -180,7 +186,7 @@ class JobOrchestrator:
 
             try:
                 if runner is not None:
-                    await asyncio.to_thread(runner, self._cfg, paper_id)
+                    await asyncio.to_thread(runner, self._cfg_getter(), paper_id)
             except Exception as e:  # noqa: BLE001 — we re-classify below
                 # StagePending lives in voicer.adapter; importing eagerly
                 # would force every test that touches the orchestrator
@@ -191,7 +197,7 @@ class JobOrchestrator:
                         type="log", paper_id=paper_id, stage=target,
                         msg=f"pending: {e}", level="info",
                     ))
-                    await asyncio.sleep(self._pending_sleep_factory(self._cfg))
+                    await asyncio.sleep(self._pending_sleep_factory(self._cfg_getter()))
                     continue
                 self._record_failure(rec, target, e)
                 await self._bus.publish(StageEvent(
