@@ -306,10 +306,16 @@ if (-not $SkipZip) {
             Pop-Location
         }
     } else {
-        Write-Host "[info ] 7z not on PATH, falling back to Compress-Archive (slower)" -ForegroundColor DarkYellow
-        # Pass the directory itself, not its glob — that way the zip gets a
-        # top-level $ReleaseName/ folder consistent with the 7z branch above.
-        Compress-Archive -Path $Stage -DestinationPath $zipPath -CompressionLevel Optimal -Force
+        Write-Host "[info ] 7z not on PATH, falling back to ZipFile.CreateFromDirectory" -ForegroundColor DarkYellow
+        # Compress-Archive is unreliable for large trees (produces corrupt zips).
+        # ZipFile.CreateFromDirectory is the safe fallback.
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $Stage,
+            $zipPath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $true   # includeBaseDirectory — top-level folder matches 7z branch
+        )
     }
 
     $size = (Get-Item $zipPath).Length / 1MB
