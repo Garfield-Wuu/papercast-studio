@@ -199,6 +199,17 @@ export function SettingsPage() {
 
   const onValidateAll = async () => {
     setValidateResult(null);
+    // Flush any unsaved secrets/config before probing — otherwise the backend
+    // reads stale env vars and reports keys as missing.
+    if (dirty) {
+      try {
+        await update.mutateAsync(buildUpdateBody(draft));
+        setDraft((prev) => prev ? { ...prev, secrets: {} } : prev);
+      } catch {
+        // update.error will surface the failure; don't proceed to validate
+        return;
+      }
+    }
     const r = await validate.mutateAsync();
     setValidateResult(r.llm);
   };
@@ -388,6 +399,37 @@ export function SettingsPage() {
 
       {/* TTS */}
       <Section icon={<Mic size={16} />} title="TTS 默认设置">
+        {/* MiniMax API Key */}
+        <Field
+          label="MiniMax API Key"
+          hint={cfg.secrets_fingerprint["MINIMAX_API_KEY"]
+            ? `当前指纹：${cfg.secrets_fingerprint["MINIMAX_API_KEY"]}`
+            : undefined}
+        >
+          <div className="flex gap-2">
+            <Input
+              type="password"
+              value={draft.secrets["MINIMAX_API_KEY"]?.value ?? ""}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  secrets: {
+                    ...draft.secrets,
+                    MINIMAX_API_KEY: { value: e.target.value },
+                  },
+                })
+              }
+              placeholder={
+                cfg.secrets_fingerprint["MINIMAX_API_KEY"] &&
+                cfg.secrets_fingerprint["MINIMAX_API_KEY"] !== "unset"
+                  ? "（已设置；输入新值会覆盖）"
+                  : "粘贴 MiniMax API Key…"
+              }
+              autoComplete="off"
+              className="font-mono text-xs"
+            />
+          </div>
+        </Field>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field
             label="音色"
