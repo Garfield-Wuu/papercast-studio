@@ -81,12 +81,12 @@ failing step + the last few lines of the start.bat console.
 ## Tagging + uploading
 
 ```bash
-git tag -a v0.1.0 -m "release: 0.1.0"
-git push origin v0.1.0
+git tag -a v0.1.1 -m "release: 0.1.1"
+git push origin v0.1.1
 ```
 
 Then on github.com → Releases → Draft a new release → pick the tag →
-upload `dist\papercast-studio-0.1.0-win-x64.zip` (and optionally the
+upload `dist\papercast-studio-0.1.1-win-x64.zip` (and optionally the
 LibreOffice portable mirror zip).
 
 A future GitHub Actions workflow (post-P11) will automate this.

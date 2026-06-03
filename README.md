@@ -1,501 +1,284 @@
-# papercast-studio (PaperCast Agent · Studio)
+<div align="center">
 
-把一篇 PDF 文献变成一段约 8 分钟、套用课题组 PPT 模板、带语音和字幕的讲解视频。
-全流程自动，仅在 PPT 与讲稿处接受人工审核。
+# 📄 → 🎬
 
-> **仓库定位**：`papercast-studio` 是 [`literature-video-agent`](https://github.com/Garfield-Wuu/literature-video-agent) v1 baseline 的支线开发分支（fork 自 commit `8e9af6c`），用于实验新特性。两个仓库使用**独立的 conda env**（`papercast` 给原仓库，`papercast-studio` 给本仓库），避免 editable 安装互相覆盖。
->
-> 完整设计文档见 Obsidian：`项目/文献分享视频生成agent工作流开发手册.md`
-> 部署平台：Hermes（Cron + 文件触发 + Discord 通知）
-> 当前状态：v1 端到端跑通（手工 + LLM 混合阶段，详见 [Bootstrap 模式](#bootstrap-模式)）
+# papercast-studio
 
----
+**Turn a PDF paper into an 8-minute lab-share video — end-to-end.**
 
-## 目录
+PDF → reading → slide plan → script → review → TTS → video. <br/>
+A 12-stage pipeline with web UI, voice cloning, and human-in-the-loop review.
 
-- [流程概览](#流程概览)
-- [系统依赖](#系统依赖)
-- [首次安装](#首次安装)
-- [配置](#配置)
-- [使用流程](#使用流程)
-- [Bootstrap 模式](#bootstrap-模式)
-- [Hermes 部署](#hermes-部署)
-- [故障排查](#故障排查)
-- [项目结构](#项目结构)
-- [测试](#测试)
+[![release](https://img.shields.io/github/v/release/Garfield-Wuu/papercast-studio?style=flat-square&color=blueviolet)](https://github.com/Garfield-Wuu/papercast-studio/releases)
+[![python](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
+[![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+[![tests](https://img.shields.io/badge/tests-95%20passing-success?style=flat-square)](#testing)
+[![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey?style=flat-square)](#install)
+[![中文](https://img.shields.io/badge/lang-中文-red?style=flat-square)](README.zh-CN.md)
+
+[**Quickstart**](#-quickstart) · [**Features**](#-features) · [**Web UI**](#-web-ui) · [**Architecture**](#-architecture) · [**Docs**](docs/) · [中文文档](README.zh-CN.md)
+
+</div>
 
 ---
 
-## 流程概览
+## ✨ Features
+
+- 🎯 **12-stage pipeline state machine** — every stage is a resumable, idempotent step. Crash mid-flow? `papercast retry-failed` picks up where you left off.
+- 🧠 **Dual LLM agents** — Reader (deep-read PDF + figures) and Author (slide planner + script writer). 10 provider presets: Anthropic, OpenAI, DeepSeek, Moonshot, Qwen, Zhipu, Ollama, vLLM, custom.
+- 🎙️ **MiniMax voice cloning** — browser-based recording (5-min cap, auto webm→mp3), system voice favorites, per-paper voice override.
+- 🎬 **1080p video composition** — LibreOffice headless renders the PPT to PNG, ffmpeg stitches per-page audio + frames.
+- 🌐 **Full Web UI** — workspace, file manager, voice studio, settings panel. WebSocket live event stream. Monaco-powered review editor with selective regeneration.
+- 📦 **Windows portable bundle** — embedded CPython 3.11 + ffmpeg + pre-built webui in a single zip. `start.bat` opens an Edge App window. LibreOffice fetched on first run.
+- 🔄 **Hot config reload** — change LLM keys / TTS settings in the UI; orchestrator picks them up on the next stage tick — no restart.
+
+---
+
+## 🚀 Quickstart
+
+### Option A — Windows portable bundle (recommended for end users)
+
+```powershell
+# 1. Download the latest release zip
+#    https://github.com/Garfield-Wuu/papercast-studio/releases
+# 2. Unzip to D:\papercast-studio (avoid OneDrive paths and spaces)
+# 3. Right-click install.ps1 → Run with PowerShell  (one-time, fetches LibreOffice)
+# 4. Edit config\secrets.env — fill ANTHROPIC_API_KEY and MINIMAX_API_KEY
+# 5. Double-click start.bat — Edge App window opens at http://127.0.0.1:8765
+```
+
+### Option B — Dev setup (clone + run)
+
+```bash
+git clone https://github.com/Garfield-Wuu/papercast-studio.git
+cd papercast-studio
+
+# Python env (use a separate env name to avoid conflicting with the v1 repo)
+conda create -n papercast-studio python=3.11 -y
+conda activate papercast-studio
+pip install -e ".[dev,llm]"
+
+# Configs
+cp config/config.example.yaml config/config.yaml
+cp config/secrets.example.env  config/secrets.env   # fill MINIMAX_API_KEY etc.
+
+# Parse the PPT template (one-time)
+papercast template-parse
+
+# Verify
+pytest                  # 95 passing
+papercast --help        # CLI reference
+```
+
+Then double-click **`dev.bat`** (Windows) — it opens two PowerShell windows running the FastAPI backend (`:8765`) and Vite dev server (`:5173`). Or call `dev.ps1` directly with `-BackendOnly` / `-FrontendOnly`.
+
+---
+
+## 🌐 Web UI
+
+The browser is the primary interface. Four top-level surfaces:
+
+| Page | Purpose |
+|---|---|
+| **🗂 Workspace** (`/`) | Task list with overview stats, drag-and-drop PDF upload, 12-stage progress bars, live WebSocket events |
+| **🔍 Review panel** | 5-tab editor (figures / reading / slides / script / facts) with Monaco, checkbox-driven selective regeneration, approve dialog |
+| **📁 Files** (`/files`) | Per-paper cards: video + PPT + source PDF, search, totals (tasks / videos / decks / disk usage), download / open / delete |
+| **🎙 Voices** (`/voices`) | Browse 75+ MiniMax system voices (CN/EN grouped) merged with local clones, inline preview, 3-step clone wizard (LLM-drafted academic-talk sample → in-browser recording → registration) |
+| **⚙ Settings** (`/settings`) | Reader/Author dual LLM cards (10 provider presets), TTS/video defaults, secret entry (writes only to `secrets.env`, never the YAML), one-click connectivity test |
+
+Drives the same stage-runner backend as the CLI (`papercast scan / tick / approve`) — pick whichever fits your flow.
+
+---
+
+## 🏗 Architecture
 
 ```
-inbox/   ─►  Reader Agent  ─►  Author Agent  ─►  [HITL 审核]  ─►  Voicer (MiniMax)  ─►  Composer (FFmpeg)  ─►  output/
- PDF        精读 + 切图        PPT + 讲稿         审阅包确认           按页 TTS              拼帧 + 视频         mp4
+        ┌──────────┐    ┌───────────┐    ┌────────┐    ┌──────────┐    ┌─────────────┐    ┌──────────┐
+PDF ──► │  Reader  │ ─► │  Author   │ ─► │ Review │ ─► │  Voicer  │ ─► │   Composer  │ ─► │  output  │
+        │ (LLM #1) │    │ (LLM #2)  │    │ (HITL) │    │ (MiniMax)│    │ (LO+ffmpeg) │    │   .mp4   │
+        └──────────┘    └───────────┘    └────────┘    └──────────┘    └─────────────┘    └──────────┘
+        parse + figs    plan + script    web UI         per-page TTS    PPT→PNG→video
 ```
 
-**12 阶段状态机**（每阶段都可断点续跑）：
+**12-stage state machine** (each stage is durable + resumable):
 
 ```
 ingested → parsed → figures_split → read_done → slides_done → script_done →
 awaiting_review → approved → tts_submitted → tts_done → composed → published
 ```
 
-每个阶段在 `work/<paper_id>/` 写一个产物文件；`papercast tick` 推进一格；任意阶段失败转 `failed`，`papercast retry-failed` 可恢复。
+Every stage writes one artifact under `work/<paper_id>/`. `papercast tick` advances by one. Any failure flips to `failed`; `papercast retry-failed` retries everything in that bucket.
+
+**File-as-truth principle**: stage runners check for the artifact file first. If it exists (manually written, edited via web UI, or LLM-generated) — runner reuses it, no LLM call, no charge. This is what lets the web UI's online editing coexist with auto-generated content seamlessly.
+
+See [`docs/CODEMAP.md`](docs/CODEMAP.md) for the full module layout.
 
 ---
 
-## 系统依赖
+## 📦 Install
 
-| 依赖 | 用途 | 必装 |
+### System dependencies
+
+| Dependency | Purpose | Required |
 |---|---|---|
-| **Python 3.11+** | 主程序 | 必 |
-| **conda 或 uv** | Python 环境管理 | 必 |
-| **LibreOffice** (`soffice`) | PPT → PNG 转图（Composer 阶段）| 必 |
-| **ffmpeg** | 图片+音频→视频拼合（Composer 阶段）| 必 |
-| **Inter 字体** + **Source Han Sans CN（思源黑体）** | PPT 模板视觉渲染 | 必 |
-| **MiniMax API key** | TTS 语音合成（Voicer 阶段）| 必 |
-| **Anthropic API key**（Hermes 注入）| LLM 精读和讲稿生成 | 用 LLM 阶段时必 |
+| **Python 3.11+** | Runtime | ✅ |
+| **conda** or **uv** | Env management | ✅ |
+| **LibreOffice** (`soffice`) | PPT → PNG render | ✅ |
+| **ffmpeg** | Video composition | ✅ |
+| **Inter** + **Source Han Sans CN** fonts | PPT visual fidelity | ✅ |
+| **MiniMax API key** | TTS | ✅ |
+| **Anthropic / OpenAI / etc. key** | LLM stages | When using LLM |
 
-### Linux（Hermes 部署目标）
+<details>
+<summary><b>Linux setup</b></summary>
 
 ```bash
 sudo apt update
-sudo apt install -y \
-    libreoffice \
-    ffmpeg \
-    fonts-noto-cjk \
-    fonts-inter
+sudo apt install -y libreoffice ffmpeg fonts-noto-cjk fonts-inter
 ```
 
-> 备注：`fonts-noto-cjk` 提供 Source Han Sans CN（Adobe 与 Google 同源字体的 Google 版本）。如果发行版没有 `fonts-inter`，从 https://github.com/rsms/inter/releases 下载手动安装到 `~/.fonts/` 后跑 `fc-cache -fv`。
+`fonts-noto-cjk` ships Source Han Sans (Google's variant of Adobe's font). If `fonts-inter` isn't packaged, grab from <https://github.com/rsms/inter/releases> → unzip into `~/.fonts/` → `fc-cache -fv`.
 
-### Windows（本地开发）
+</details>
+
+<details>
+<summary><b>Windows setup</b></summary>
 
 ```powershell
-# 系统依赖
 winget install --id=Gyan.FFmpeg -e
 winget install --id=TheDocumentFoundation.LibreOffice -e
 
-# 字体（手动下载安装）
-# Inter:           https://github.com/rsms/inter/releases  (下载 zip 解压，全选 .ttf 右键"为所有用户安装")
-# Source Han Sans: https://github.com/adobe-fonts/source-han-sans/releases  (选 SourceHanSansSC.zip)
+# Fonts (manual)
+# Inter:           https://github.com/rsms/inter/releases  (zip → unzip → select all .ttf → "Install for all users")
+# Source Han Sans: https://github.com/adobe-fonts/source-han-sans/releases  (SourceHanSansSC.zip)
 ```
 
-装完**重开 PowerShell** 让 PATH 刷新。验证：
+Reopen PowerShell after install. Verify: `ffmpeg -version`, `soffice --version`.
 
-```powershell
-ffmpeg -version    # 输出版本号
-soffice --version  # 输出版本号 (Windows 装在 C:\Program Files\LibreOffice\program\，不在 PATH 也行——代码会兜底找)
-```
+</details>
 
 ---
 
-## 首次安装
-
-```bash
-# 1. clone
-git clone https://github.com/Garfield-Wuu/papercast-studio.git
-cd papercast-studio
-
-# 2. Python 环境（任选）
-# --- 方案 A：conda（开发推荐）---
-# 注意：studio 必须用独立 env，不要复用原 literature-video-agent 的 `papercast` env，
-# 否则两边 editable 安装会互相覆盖 .pth 文件。
-conda create -n papercast-studio python=3.11 -y
-conda activate papercast-studio
-pip install -e ".[dev,llm]"
-
-# --- 方案 B：uv（部署推荐）---
-# 装 uv: https://docs.astral.sh/uv/
-uv sync
-
-# 3. 配置文件（按下一节填实际值）
-cp config/config.example.yaml config/config.yaml
-cp config/secrets.example.env  config/secrets.env
-
-# 4. 把 PPT 模板解析成 schema（一次性，模板变了再跑）
-papercast template-parse                    # 如果用 conda
-# 或
-uv run papercast template-parse             # 如果用 uv
-
-# 5. 验证装得对
-pytest                                      # 应输出 95 passed
-papercast --help                            # 应列出所有子命令
-```
-
----
-
-## 配置
+## ⚙ Configuration
 
 ### `config/config.yaml`
 
-完整字段见 `config/config.example.yaml`，关键项：
-
 ```yaml
 paths:
-  inbox: ./inbox            # 用户投递 PDF 的目录
-  work:  ./work             # 每篇论文的工作目录（产物落盘点）
-  review: ./review          # 审阅包目录
-  output: ./output           # 最终视频输出
-  template: ./templates/lab_template.pptx           # 课题组 PPT 模板（仓库内）
-  template_meta: ./templates/lab_template.meta.json # 模板解析后的 schema
+  inbox: ./inbox
+  work:  ./work
+  review: ./review
+  output: ./output
+  template: ./templates/lab_template.pptx
+  template_meta: ./templates/lab_template.meta.json
 
 tts:
   provider: minimax
-  voice: female_warm        # MiniMax 音色 ID（默认）；可在 approval.json 里 per-paper 覆盖
+  voice: female_warm        # default; per-paper override in approval.json
   speed: 1.0
-  concurrency: 3            # 并发提交页数（避免 MiniMax 限流）
+  concurrency: 3
 
 video:
   resolution: 1920x1080
   fps: 30
   audio_bitrate: 192k
-  naming: "{date}_{paper_id}.mp4"   # 输出文件名模板
+  naming: "{date}_{paper_id}.mp4"
 
 slides:
-  target_pages: [12, 15]    # 软指引；硬上下限 10 / 17
-  speaking_rate_cpm: 220    # 中文每分钟字符数估算
-  target_duration_sec: [420, 540]   # 总片长 7-9 分钟
+  target_pages: [12, 15]
+  speaking_rate_cpm: 220
+  target_duration_sec: [420, 540]
 ```
 
 ### `config/secrets.env`
 
 ```bash
-# Anthropic LLM（Reader 精读 + Author 讲稿；目前 v1 是手工，Hermes 接 LLM 后用）
 ANTHROPIC_API_KEY=sk-ant-...
-
-# MiniMax TTS
-MINIMAX_API_KEY=sk-...      # 必填，从 https://platform.minimaxi.com 获取
-
-# Discord webhook（Hermes 已有，注入即可）
-DISCORD_WEBHOOK_PAPERCAST=https://discord.com/api/webhooks/...
+MINIMAX_API_KEY=sk-...
 ```
 
-> ⚠️ **`config/secrets.env` 已被 .gitignore，永远不要 commit。** Hermes 部署时通过环境变量或 secrets manager 注入实际值。
+> ⚠️ `config/secrets.env` is `.gitignore`d. Never commit it.
 
-### 音色 ID
+### Voice cloning
 
-`config.tts.voice` 是默认值。如果你在 MiniMax 控制台做了**复刻音色**（推荐课题组录一段自己的声音），把音色 ID（如 `xhsgarfield1`）写到这里，所有论文都用这个音色。
-
-特定论文想换音色，编辑 `review/<paper_id>/approval.json` 里的 `voice` 字段，下次 tick 自动用新音色（设计稿 §10.3）。
+Default voice lives in `config.tts.voice`. Cloned voices register in `config/voices.json` (also gitignored — your account, your data). Override per-paper by editing `voice` in `review/<paper_id>/approval.json`.
 
 ---
 
-## 使用流程
+## 💻 CLI
 
-### 完整端到端示例
+| Command | Purpose |
+|---|---|
+| `papercast scan` | Scan `inbox/`, register new PDFs |
+| `papercast tick [pid]` | Advance one stage (no pid = advance all eligible) |
+| `papercast status [pid]` | Inspect state machine history |
+| `papercast review <pid>` | Print review pack path |
+| `papercast approve <pid> --report-date YYYY-MM-DD` | Approve, trigger TTS |
+| `papercast retry-failed` | Retry all `failed` tasks |
+| `papercast template-parse [--force]` | Re-parse the PPT template |
+
+<details>
+<summary><b>End-to-end CLI walkthrough</b></summary>
 
 ```bash
-# 1. 把 PDF 丢进 inbox/
 cp ~/Downloads/some_paper.pdf inbox/
-
-# 2. 注册任务（计算 sha1[:10] 当 paper_id，复制到 work/<pid>/source.pdf）
-papercast scan
-# → registered a1b2c3d4e5
-
-# 3. 推进 reader 阶段（PDF 解析 + 图表抽取 + 五段式精读）
-papercast tick a1b2c3d4e5  # ingested → parsed
-papercast tick a1b2c3d4e5  # parsed → figures_split
-papercast tick a1b2c3d4e5  # figures_split → read_done
-
-# ⚠️ 当前 read_done 阶段需要 reading.json 已在 work/<pid>/，
-#    Bootstrap 模式下手工写；Hermes 接 LLM 后自动产生（详见下一节）
-
-# 4. 推进 author 阶段（slides_plan + 装配 PPT + 讲稿）
-papercast tick a1b2c3d4e5  # read_done → slides_done    （需要 slides_plan.json）
-papercast tick a1b2c3d4e5  # slides_done → script_done   （需要 script.md，备注栏自动填）
-papercast tick a1b2c3d4e5  # script_done → awaiting_review（生成 review/<pid>/ 包）
-
-# 5. 人工审核 review/<pid>/REVIEW.md（checklist），通过后：
-papercast approve a1b2c3d4e5 --report-date 2026-05-29 --reviewer "yourname"
-# Cover 上 {{REPORT_DATE}} 被替换成 2026-05-29，PPT 重新装配
-
-# 6. TTS（异步，按页提交 → 轮询 → 下载）
-papercast tick a1b2c3d4e5  # approved → tts_submitted   （提交 13 个 MiniMax 任务）
-papercast tick a1b2c3d4e5  # tts_submitted → tts_done    （如果 pending，下次 tick 再试）
-
-# 7. 视频合成
-papercast tick a1b2c3d4e5  # tts_done → composed         （PPT 转 PNG + ffmpeg）
-papercast tick a1b2c3d4e5  # composed → published        （拷到 output/）
-
-# 8. 拿到视频
-ls output/
-# → 2026-05-29_a1b2c3d4e5.mp4
+papercast scan                                      # → registered a1b2c3d4e5
+papercast tick a1b2c3d4e5                           # repeat until awaiting_review
+papercast approve a1b2c3d4e5 --report-date 2026-05-29 --reviewer "you"
+papercast tick a1b2c3d4e5                           # repeat until published
+ls output/                                          # → 2026-05-29_a1b2c3d4e5.mp4
 ```
 
-### 常用命令
-
-| 命令 | 用途 |
-|---|---|
-| `papercast scan` | 扫描 `inbox/` 注册新论文 |
-| `papercast tick [pid]` | 推进任务一格（不传则推所有可推进任务） |
-| `papercast status [pid]` | 查看任务状态机历史 |
-| `papercast review <pid>` | 输出审阅包路径 |
-| `papercast approve <pid> --report-date YYYY-MM-DD` | 通过审核，触发 TTS |
-| `papercast retry-failed` | 重试所有 `failed` 状态的任务 |
-| `papercast template-parse [--force]` | 重新解析 PPT 模板（模板变更时跑） |
+</details>
 
 ---
 
-## Web UI（HTTP / WebSocket 服务）
+## 🚀 Hermes deployment
 
-**P6 完成 — 浏览器闭环，零 CLI 也能跑完整个流水线**。可以选择通过浏览器 UI 操作（推荐），或直接用 curl 驱动后端。
+papercast-studio runs as a long-lived service on Hermes (cron + Discord trigger).
 
-### 启动 — 浏览器 UI（dev）
-
-需要两个进程：
-
-```bash
-# 1. 后端 FastAPI
-python -m papercast.server --reload --log-level info
-# → http://127.0.0.1:8765
-
-# 2. 前端 Vite（另一个终端）
-cd webui
-npm install        # 仅首次
-npm run dev
-# → http://127.0.0.1:5173
-```
-
-打开 <http://127.0.0.1:5173> 即可。Vite 会把 `/api/*` 和 `/ws/*` 自动转发到后端 8765。
-
-UI 包含四个顶层页面：
-- **工作区**（`/`）：任务列表 + 总览统计 + 拖拽上传 PDF；详情页有 12 阶段进度条、WebSocket 实时事件流、启动/停止/重试
-- **工作区·任务详情** 内置 5 Tab 审阅面板（figures / reading / slides / script / facts），支持 Monaco 在线编辑、勾选式局部重生、approve 后自动进入合成阶段
-- **文件管理**（`/files`）：按论文展示视频 + PPT + 原文 PDF 卡片，搜索 + 总览（任务数 / 视频成品 / 演示 PPT / 累计存储）；下载 / 在系统中打开 / 删除
-- **语音管理**（`/voices`）：浏览 75+ 个 MiniMax 系统音色（中英分组）+ 本地克隆音色合并表，行内试听；3 步克隆向导（关键词→Author LLM 写学术汇报样本 / 内置范例 / 粘贴自带 → 浏览器在线录音 + 5 分钟硬截断 / 文件上传 → 注册）；webm 录音由后端 ffmpeg 自动转 mp3
-- **配置**（`/settings`）：可编辑 — Reader / Author 双 LLM 卡片（10 个 provider 预设：Anthropic / OpenAI / DeepSeek / Moonshot / Qwen / 智谱 / Ollama / vLLM / 自定义），TTS / 视频参数，密钥录入（只入 secrets.env 不入 yaml）；总览条 + 系统信息（版本/依赖/工作目录）+ 一键「测试连通性」
-
-详见 [`docs/FRONTEND.md`](docs/FRONTEND.md)。
-
-### 仅启动后端（用 curl / Swagger）
-
-```bash
-python -m papercast.server --port 8765 --log-level warning
-```
-
-启动后：
-- Swagger UI：<http://127.0.0.1:8765/docs>
-- 健康检查：<http://127.0.0.1:8765/api/health>
-- 详细 API 参考：[`docs/SERVER_API.md`](docs/SERVER_API.md)
-
-### 一行式：上传 + 推进 + 审阅（curl）
-
-```bash
-PID=$(curl -s -F "file=@./paper.pdf" http://127.0.0.1:8765/api/papers | jq -r .paper_id)
-curl -X POST http://127.0.0.1:8765/api/papers/$PID/start
-# ... 等到 needs_review 事件 ...
-curl -X POST http://127.0.0.1:8765/api/papers/$PID/review/approve \
-     -H "Content-Type: application/json" \
-     -d '{"report_date": "2026年5月17日", "reviewer": "Wu", "voice": "xhsgarfield1"}'
-```
-
-CLI（`papercast scan / tick / approve`）和 server **共用同一套 stage runner**，
-使用任意一个都不会让另一个失效。
-
----
-
-
-## Bootstrap 模式
-
-**v1 历史状态**：手工产生 reading.json / slides_plan.json / script.md 跑通。
-P1 之后由 LLM 自动产生（默认行为），但这个 fallback 仍然保留——只要文件提前存在，
-runner 就直接复用，不调 LLM、不计费。这条「文件即真相」的规则也是 webui 在线编辑
-能与 LLM 自动生成无缝并存的基础。
-
-| 阶段 | 产物 | 当前 v1 | 接 LLM 后 |
-|---|---|---|---|
-| `read_done` | `work/<pid>/reading.json`（五段式精读 + fact_cards） | 手工写 | LLM 读 PDF + figures.json 自动产出 |
-| `slides_done` | `work/<pid>/slides_plan.json`（13 页计划）| 手工写 | LLM 用 reading.json + meta.json 自动规划 |
-| `script_done` | `work/<pid>/script.md`（口语化讲稿）| 手工写 | LLM 按 slides_plan 自动撰写 |
-
-`tick` 进入这三个阶段时**会检查产物文件存在**，存在就 no-op 推进，不存在就报 `FileNotFoundError`。这样**手工和 LLM 模式都能跑同一套 CLI**。
-
-**接 LLM 时要做的**（Hermes 侧或本仓库）：
-1. `papercast/reader/reading.py` 已经定义 `LLMReader` Protocol，注入实现即可
-2. `papercast/author/` 还需要写 `planner.py`（产 slides_plan.json）和 `scripter.py`（产 script.md）；同样用 Protocol 让 Hermes 注入 LLM 客户端
-3. 把 `_read_done_runner` 等改成"文件不存在时调用 LLM 生成"
-
-详见 [`papercast/reader/reading.py`](papercast/reader/reading.py) 里的 `LLMReader` 注释。
-
-### 手工写产物的格式
-
-- **reading.json** schema：见 `papercast/reader/reading.py` 里的 `FiveSectionReading` dataclass
-- **slides_plan.json** schema：见 `papercast/author/render.py` 里的 `SlidesPlan`，字段必须匹配 `templates/lab_template.meta.json` 里的 layout name 和 placeholder name
-- **script.md** 格式：每页 `## Page N` 标题 + 一段口语化讲稿；详见 `work/e8f6731a14/script.md` 实际样本
-- 风格规范：参考 ~/.claude/projects/<repo>/memory/feedback-script-style.md（学术汇报口吻）和 feedback-tts-pronunciation.md（IEEE → I Triple E 等）
-
----
-
-## Hermes 部署
-
-### 1. 拉代码
-
-```bash
-git clone https://github.com/Garfield-Wuu/papercast-studio.git /opt/papercast-studio
-cd /opt/papercast-studio
-```
-
-### 2. 装系统依赖（Linux 版见 [系统依赖](#linux-hermes-部署目标) 一节）
-
-### 3. 装 Python 环境
-
-```bash
-# 推荐 uv（更快、单文件锁）
-uv sync
-```
-
-### 4. 注入 secrets
-
-通过 Hermes secrets manager 把以下变量注入进程环境：
-
-```
-ANTHROPIC_API_KEY=...
-MINIMAX_API_KEY=...
-DISCORD_WEBHOOK_PAPERCAST=https://...
-```
-
-### 5. 配置文件
-
-```bash
-cp config/config.example.yaml config/config.yaml
-# 按需修改 voice、resolution、naming 等
-```
-
-### 6. 解析模板
-
-```bash
-uv run papercast template-parse --force
-```
-
-### 7. 触发模型 — Discord 主路径 + cron 兜底
-
-**主路径（Discord 自然语句）**：Hermes 监听 Discord，识别意图触发命令：
-
-| 用户在 Discord 说 | Hermes 执行 |
-|---|---|
-| 「我上传了一篇新文献，扫一下」 | `papercast scan` 然后 `papercast tick` |
-| 「a1b2c3 现在到哪了」 | `papercast status a1b2c3` |
-| 「a1b2c3 审核通过，日期 2026-05-29」 | `papercast approve a1b2c3 --report-date 2026-05-29 --reviewer <user>` |
-| 「重试一下失败的」 | `papercast retry-failed` |
-
-> Discord 监听层是 **Hermes 侧的能力**，不在本仓库。
-
-**cron 兜底（低频，确保异步链路推进）**：
+<details>
+<summary><b>cron entries</b></summary>
 
 ```cron
-# 每天早上 9:07 兜底扫一次 inbox
+# Daily inbox scan
 7 9 * * *    cd /opt/papercast-studio && uv run papercast scan
 
-# 每 5 分钟把可推进的任务往前推一格（TTS 异步轮询、视频合成需要持续 tick）
+# Advance pending tasks every 5 min (TTS poll, video composition)
 */5 * * * *  cd /opt/papercast-studio && uv run papercast tick
 
-# 每小时给失败任务一次重试机会
+# Hourly retry pass
 13 * * * *   cd /opt/papercast-studio && uv run papercast retry-failed
 ```
 
-终态（`published` / `failed`）和人工审核态（`awaiting_review`）会自动跳过，高频 `tick` 几乎零成本。
+</details>
+
+<details>
+<summary><b>Discord trigger flow</b></summary>
+
+| User says (Discord) | Hermes runs |
+|---|---|
+| "Uploaded a new paper, scan" | `papercast scan` then `papercast tick` |
+| "Where's a1b2c3 at?" | `papercast status a1b2c3` |
+| "Approve a1b2c3, date 2026-05-29" | `papercast approve a1b2c3 --report-date 2026-05-29 --reviewer <user>` |
+| "Retry failures" | `papercast retry-failed` |
+
+The Discord listener lives in Hermes, not in this repo.
+
+</details>
 
 ---
 
-## 故障排查
-
-### `MINIMAX_API_KEY not set`
-
-环境变量没注入。检查 `secrets.env` 是否被加载（开发时手动 export，部署时 Hermes 注入），或在调用前显式：
+## 🧪 Testing
 
 ```bash
-export MINIMAX_API_KEY=sk-...
-papercast tick <pid>
+pytest                                      # 95 passing, no external deps required
+pytest --cov=papercast --cov-report=term    # coverage
+pytest tests/test_author_render.py -v       # single file
 ```
 
-### `LibreOffice (soffice) not found`
-
-Linux：`apt install libreoffice`
-Windows：装到 `C:\Program Files\LibreOffice\program\`（默认位置，代码自动找）；或 `winget install TheDocumentFoundation.LibreOffice`
-
-### `ffmpeg not found on PATH`
-
-Linux：`apt install ffmpeg`
-Windows：`winget install Gyan.FFmpeg`，**装完重开 PowerShell**。代码也会兜底找 winget 的 per-user 安装路径。
-
-### PPT 视频里字体跟原 PPT 不一样
-
-LibreOffice 找不到模板里的字体（Inter / Source Han Sans CN），用了替换字体。
-- Linux：`apt install fonts-noto-cjk fonts-inter`
-- Windows：从 GitHub 下载这两个字体的安装包，全选 .ttf/.otf 右键「为所有用户安装」
-
-### TTS 把 IEEE 念成一个词（"ee-ee"）
-
-讲稿里写 `IEEE` 时，TTS 会当英文单词读。需要拆开写：
-- 学界标准念法："I Triple E"（讲稿里直接写 `I Triple E`，TTS 念出 "I Triple E"）
-- 其他缩写（IROS / ICRA）：在字母间加空格，如 `I R O S`
-
-### `papercast tick` 在 tts_submitted 卡住
-
-正常现象。MiniMax 异步任务还在处理，下次 cron tick（5 min）再试。状态显示为 `pending`，不算失败。
-
-### Cover 上的日期还是 `{{REPORT_DATE}}` 字面量
-
-没跑过 `papercast approve <pid> --report-date YYYY-MM-DD`。先 approve 再 tick。
-
-### 测试通过但 `papercast tick` 报奇怪错误
-
-测试用 mock，端到端要真实 ffmpeg / soffice / MiniMax key。先确认这三样都到位（见 [系统依赖](#系统依赖)）。
-
----
-
-## 项目结构
-
-```
-papercast/                       # Python 包
-├── core/                        # 状态机、SQLite、配置加载、scanner
-├── reader/                      # PDF parse + 图表抽取 + 五段式 reading
-│   ├── pdf.py                   # PyMuPDF parse → ParsedDocument
-│   ├── figures.py               # caption-driven 图表提取（含 PDF 首页截图）
-│   ├── reading.py               # FiveSectionReading + LLMReader Protocol
-│   └── pipeline.py              # tick stage 的 runner
-├── author/                      # PPT 装配 + 讲稿处理
-│   ├── template.py              # PPT 模板解析（template-parse 命令）
-│   └── render.py                # JSON-first 装配器（assemble_pptx + parse_script_md）
-├── voicer/                      # MiniMax TTS 适配器
-│   ├── adapter.py               # MiniMaxClient Protocol + PaperCastVoicer + StagePending
-│   ├── minimax.py               # 真实 HTTP 客户端（Hermes 可注入自己的）
-│   └── pipeline.py              # tick stage 的 runner
-├── composer/                    # 视频合成
-│   ├── render.py                # PPT → PDF → PNG（LibreOffice headless）
-│   ├── ffmpeg.py                # 逐页 mp4 合成 + concat
-│   └── pipeline.py              # tick stage 的 runner
-├── notifier/                    # 审阅包生成（Discord 留给 Hermes）
-│   └── review_pack.py
-└── cli/main.py                  # typer CLI 入口
-
-inbox/  archive/  work/  review/  output/  logs/   # 运行时数据（被 .gitignore）
-templates/lab_template.pptx                        # 课题组 PPT 母版（入库）
-templates/lab_template_demo.pptx                   # demo 样本（入库，给 LLM 提供 schema_examples）
-templates/lab_template.meta.json                   # 模板解析产物（入库）
-prompts/                                           # LLM Prompt 模板（reading.md / slides_plan.md / script.md）
-config/                                            # 配置示例（secrets 不入库）
-tests/                                             # pytest 单元测试（95 个）
-```
-
----
-
-## 测试
-
-```bash
-# 全部测试（不需要 ffmpeg / LibreOffice / API key，subprocess 都已 mock）
-pytest
-
-# 含覆盖率
-pytest --cov=papercast --cov-report=term
-
-# 单文件
-pytest tests/test_author_render.py -v
-```
-
-| 模块 | 测试数 | 覆盖率 |
-|---|---|---|
+| Module | Tests | Coverage |
+|---|---:|---:|
 | author/template | 15 | 96% |
 | author/render | 16 | — |
 | reader/pdf | 7 | 97% |
@@ -504,13 +287,90 @@ pytest tests/test_author_render.py -v
 | voicer/adapter | 9 | 91% |
 | composer | 11 | 88% |
 | notifier/review_pack | 8 | 96% |
-| core/state, db, scanner | 10 | 95% 平均 |
-| **整体** | **95** | **79%** |
+| core/state, db, scanner | 10 | 95% avg |
+| **Total** | **95** | **79%** |
 
-> Pipeline runner 文件（reader/voicer/composer 的 pipeline.py）覆盖率 0%，因为它们是端到端胶水——验证靠真实 `papercast tick` 跑通，不是单测。
+> The pipeline runner files (`reader/voicer/composer/pipeline.py`) sit at 0% — they're end-to-end glue, validated by real `papercast tick` runs, not by unit tests.
 
 ---
 
-## License
+## 📂 Project layout
 
-MIT（仅供课题组内部使用）
+```
+papercast/                       # Python package
+├── core/                        # state machine, SQLite, config, scanner
+├── reader/                      # PDF parse + figure extraction + reading
+├── author/                      # PPT assembly + script handling
+├── voicer/                      # MiniMax TTS adapter
+├── composer/                    # PPT → PNG → mp4
+├── notifier/                    # review pack generator
+└── server/                      # FastAPI + WebSocket + SPA mount
+webui/                           # React + Vite + Tailwind frontend
+bootstrap/                       # Windows portable build scripts
+docs/                            # design + API + plan docs
+templates/                       # PPT master + parsed schema
+prompts/                         # LLM prompt templates
+tests/                           # 95 pytest cases
+```
+
+---
+
+## 🔧 Troubleshooting
+
+<details>
+<summary><b><code>MINIMAX_API_KEY not set</code></b></summary>
+
+Env var didn't load. Either fill it in the Settings page (writes to `secrets.env`), or `export` it in your shell.
+
+</details>
+
+<details>
+<summary><b><code>LibreOffice (soffice) not found</code></b></summary>
+
+Linux: `apt install libreoffice`. Windows: `winget install TheDocumentFoundation.LibreOffice` — installs to `C:\Program Files\LibreOffice\`, code finds it without PATH munging.
+
+</details>
+
+<details>
+<summary><b><code>ffmpeg not found on PATH</code></b></summary>
+
+`winget install Gyan.FFmpeg` (Windows) or `apt install ffmpeg` (Linux). **Reopen PowerShell** after winget install.
+
+</details>
+
+<details>
+<summary><b>Fonts in rendered video differ from the PPT</b></summary>
+
+LibreOffice fell back when it couldn't find Inter / Source Han Sans CN. Install both system-wide. See the [Install](#-install) section.
+
+</details>
+
+<details>
+<summary><b>TTS reads "IEEE" as one word ("ee-ee")</b></summary>
+
+Write `I Triple E` (academic convention) in scripts. For other acronyms (IROS / ICRA), space the letters: `I R O S`.
+
+</details>
+
+<details>
+<summary><b><code>papercast tick</code> stuck on <code>tts_submitted</code></b></summary>
+
+Normal. MiniMax tasks are async; the next cron tick (5 min) polls again. Status shows `pending`, not failed.
+
+</details>
+
+---
+
+## 📜 License
+
+MIT. See [`LICENSE`](LICENSE).
+
+---
+
+<div align="center">
+
+Built with ❤️ for [literature-video-agent](https://github.com/Garfield-Wuu/literature-video-agent).
+
+[Report bug](https://github.com/Garfield-Wuu/papercast-studio/issues) · [Request feature](https://github.com/Garfield-Wuu/papercast-studio/issues) · [中文文档](README.zh-CN.md)
+
+</div>
