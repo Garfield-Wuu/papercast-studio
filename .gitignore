@@ -45,10 +45,14 @@ output/*
 logs/*
 !logs/.gitkeep
 
-# template binaries — committed as authoritative source for the parser.
-# Only ignore local backups and PowerPoint lock files.
-templates/*.backup.pptx
-templates/~$*.pptx
+# templates — user-managed PPT masters + parsed schema. Not part of
+# the source distribution; each install brings its own. We only track
+# the *.example.pptx skeletons so the directory has something to clone
+# into and tests/docs have a stable filename to reference.
+templates/*
+!templates/.gitkeep
+!templates/*.example.pptx
+!templates/README.md
 
 # --- test ---
 .pytest_cache/
