@@ -83,26 +83,72 @@ def clone_voice(
     filename: str = "sample.mp3",
     content_type: str = "audio/mpeg",
     prompt_text: str | None = None,
+    prompt_audio: bytes | None = None,
+    prompt_audio_filename: str = "prompt.mp3",
+    prompt_audio_content_type: str = "audio/mpeg",
     model: str = "speech-2.6-hd",
 ) -> dict[str, Any]:
     """Upload audio and register a cloned voice in one go.
 
+    Two MiniMax-side audio samples are involved, with different roles:
+
+      audio (required, 10s–5min, ≤ 20 MB)
+        The main voice sample. The model learns the timbre from this.
+        No transcript needed.
+
+      prompt_audio + prompt_text (optional pair, < 8 s)
+        A short reference snippet with the exact words spoken. Used by
+        MiniMax to anchor the cloned voice to a specific aligned
+        sample. Both must be supplied together; supplying one without
+        the other is rejected.
+
+    The two samples are uploaded with different `purpose` values
+    (`voice_clone` vs `prompt_audio`); MiniMax rejects (status 2013)
+    if a single file_id is referenced under both fields. Do NOT pass
+    the main `audio` bytes again as `prompt_audio` — even if the same
+    recording is short enough, the purposes don't match and the
+    duration cap on prompt_audio is much tighter.
+
     Returns:
         {
-          "voice_id": str,
-          "file_id":  int,
-          "model":    str,
-          "raw":      <full register response dict>,
+          "voice_id":        str,
+          "file_id":         int,
+          "prompt_audio_id": int | None,  # only when prompt_audio given
+          "model":           str,
+          "raw":             <full register response dict>,
         }
     """
     validate_voice_id(voice_id)
     if not audio:
         raise ValueError("empty audio bytes")
-    file_id = client.upload_clone_audio(audio, filename=filename, content_type=content_type)
+    # Catch the easy footgun before going over the wire: prompt_text and
+    # prompt_audio must travel together. (MiniMax also enforces this,
+    # but the local error message is clearer.)
+    if (prompt_text is None) != (prompt_audio is None):
+        raise ValueError(
+            "prompt_text and prompt_audio must be supplied together "
+            "(or neither). They form MiniMax's clone_prompt object — "
+            "a < 8 s reference snippet plus its exact transcript.",
+        )
+
+    file_id = client.upload_clone_audio(
+        audio, filename=filename, content_type=content_type,
+        purpose="voice_clone",
+    )
+    prompt_audio_id: int | None = None
+    if prompt_audio is not None:
+        prompt_audio_id = client.upload_clone_audio(
+            prompt_audio,
+            filename=prompt_audio_filename,
+            content_type=prompt_audio_content_type,
+            purpose="prompt_audio",
+        )
     try:
         raw = client.voice_clone(
             file_id=file_id, voice_id=voice_id,
-            prompt_text=prompt_text, model=model,
+            prompt_text=prompt_text,
+            prompt_audio_id=prompt_audio_id,
+            model=model,
         )
     except Exception as e:
         # Wrap so the caller (route) can return the message verbatim.
@@ -110,6 +156,7 @@ def clone_voice(
     return {
         "voice_id": voice_id,
         "file_id": file_id,
+        "prompt_audio_id": prompt_audio_id,
         "model": model,
         "raw": raw,
     }

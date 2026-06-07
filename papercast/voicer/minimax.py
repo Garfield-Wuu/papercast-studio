@@ -155,13 +155,27 @@ class MiniMaxAPIClient:
     def upload_clone_audio(
         self, audio: bytes, filename: str = "sample.mp3",
         content_type: str = "audio/mpeg",
+        purpose: str = "voice_clone",
     ) -> int:
-        """Upload an audio sample for cloning. Returns numeric file_id."""
+        """Upload an audio sample. Returns numeric file_id.
+
+        `purpose` is one of MiniMax's documented values:
+          - "voice_clone" — main sample. mp3/m4a/wav, 10s–5min, ≤ 20 MB.
+            Goes into voice_clone.file_id.
+          - "prompt_audio" — short reference sample with a transcript.
+            mp3/m4a/wav, < 8 s, ≤ 20 MB. Goes into
+            voice_clone.clone_prompt.prompt_audio (paired with
+            prompt_text). Optional; only used when the caller wants to
+            anchor cloning to a specific aligned snippet.
+        The purposes are exclusive: MiniMax returns status 2013
+        ("file purpose not match") if a file uploaded for one purpose is
+        referenced under the other.
+        """
         with httpx.Client(timeout=self._timeout) as client:
             r = client.post(
                 f"{self._base_url}/v1/files/upload",
                 headers=self._auth_headers(),
-                data={"purpose": "voice_clone"},
+                data={"purpose": purpose},
                 files={"file": (filename, audio, content_type)},
             )
             r.raise_for_status()
@@ -178,9 +192,16 @@ class MiniMaxAPIClient:
     def voice_clone(
         self, *, file_id: int, voice_id: str,
         prompt_text: str | None = None,
+        prompt_audio_id: int | None = None,
         model: str = "speech-2.6-hd",
     ) -> dict:
         """Register a cloned voice from an uploaded file_id.
+
+        When `prompt_text` is provided, MiniMax requires `prompt_audio`
+        in `clone_prompt` to reference a *separately uploaded* file
+        whose `purpose=prompt_audio` (not `voice_clone`). Pass that
+        file's id as `prompt_audio_id`. Reusing the main `file_id` here
+        triggers status 2013: "file purpose not match".
 
         Returns the raw response dict; useful keys:
           - input_sensitive: bool — whether the upload contained
@@ -193,8 +214,14 @@ class MiniMaxAPIClient:
             "model": model,
         }
         if prompt_text:
+            if prompt_audio_id is None:
+                raise ValueError(
+                    "prompt_text requires prompt_audio_id (a file uploaded "
+                    "with purpose=prompt_audio); reusing the main voice_clone "
+                    "file_id is rejected by MiniMax with status 2013.",
+                )
             body["clone_prompt"] = {
-                "prompt_audio": file_id,
+                "prompt_audio": prompt_audio_id,
                 "prompt_text": prompt_text,
             }
         resp = self._post("/v1/voice_clone", json=body)

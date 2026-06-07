@@ -24,17 +24,22 @@ class _StubClient:
         self.previews: list[dict] = []
         self._next_file_id = 5000
 
-    def upload_clone_audio(self, audio, *, filename, content_type):
+    def upload_clone_audio(self, audio, *, filename, content_type, purpose="voice_clone"):
         self.uploads.append(
-            {"size": len(audio), "filename": filename, "content_type": content_type},
+            {"size": len(audio), "filename": filename,
+             "content_type": content_type, "purpose": purpose},
         )
         self._next_file_id += 1
         return self._next_file_id
 
-    def voice_clone(self, *, file_id, voice_id, prompt_text=None, model="speech-2.6-hd"):
+    def voice_clone(
+        self, *, file_id, voice_id, prompt_text=None,
+        prompt_audio_id=None, model="speech-2.6-hd",
+    ):
         self.clones.append({
             "file_id": file_id, "voice_id": voice_id,
-            "prompt_text": prompt_text, "model": model,
+            "prompt_text": prompt_text,
+            "prompt_audio_id": prompt_audio_id, "model": model,
         })
         return {"base_resp": {"status_code": 0, "status_msg": "success"}}
 
@@ -91,6 +96,10 @@ def test_list_after_clone(client: TestClient, workspace: Path) -> None:
 def test_clone_invokes_minimax_with_form_fields(
     client: TestClient, _patch_minimax_client: _StubClient,
 ) -> None:
+    """Form fields propagate: voice_id reaches MiniMax, label reaches
+    voices.json. prompt_text stays *local* — it's saved into voices.json
+    as user-facing metadata but is NOT forwarded to MiniMax (see the
+    next test for why)."""
     r = client.post(
         "/api/voice/clone",
         data={"voice_id": "abc123", "label": "alice", "prompt_text": "hello"},
@@ -99,7 +108,36 @@ def test_clone_invokes_minimax_with_form_fields(
     assert r.status_code == 201, r.text
     assert _patch_minimax_client.uploads[0]["filename"] == "a.wav"
     assert _patch_minimax_client.clones[0]["voice_id"] == "abc123"
-    assert _patch_minimax_client.clones[0]["prompt_text"] == "hello"
+    # prompt_text NOT forwarded to MiniMax — it lacks the paired < 8 s
+    # prompt_audio that clone_prompt requires.
+    assert _patch_minimax_client.clones[0]["prompt_text"] is None
+
+
+def test_clone_does_not_forward_prompt_text_to_minimax(
+    client: TestClient, _patch_minimax_client: _StubClient, workspace,
+) -> None:
+    """Regression: passing the user's full read-aloud script as MiniMax's
+    `prompt_text` (without an aligned < 8 s `prompt_audio`) was the
+    cause of "status 2013, file purpose not match" in production. The
+    route now keeps prompt_text local — it's saved into voices.json as
+    metadata for the wizard's "what did I read?" view, but only the
+    main voice_clone upload reaches MiniMax."""
+    r = client.post(
+        "/api/voice/clone",
+        data={"voice_id": "withscript", "prompt_text": "讲稿样本" * 50},
+        files={"file": ("a.mp3", io.BytesIO(b"x" * 100), "audio/mpeg")},
+    )
+    assert r.status_code == 201, r.text
+    # Single upload, voice_clone purpose, no clone_prompt on the wire.
+    assert len(_patch_minimax_client.uploads) == 1
+    assert _patch_minimax_client.uploads[0]["purpose"] == "voice_clone"
+    assert _patch_minimax_client.clones[0]["prompt_text"] is None
+    assert _patch_minimax_client.clones[0]["prompt_audio_id"] is None
+    # ...but voices.json still records the script for the user.
+    on_disk = json.loads(
+        (workspace / "config" / "voices.json").read_text(encoding="utf-8"),
+    )
+    assert on_disk[0]["prompt_text"] == "讲稿样本" * 50
 
 
 def test_clone_rejects_invalid_voice_id(client: TestClient) -> None:

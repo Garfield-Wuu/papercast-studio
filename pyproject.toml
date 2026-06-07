@@ -1,6 +1,6 @@
 [project]
 name = "papercast"
-version = "0.1.1"
+version = "0.1.2"
 description = "Turn a PDF paper into an 8-min lab-share video, end-to-end on Hermes."
 readme = "README.md"
 requires-python = ">=3.11"

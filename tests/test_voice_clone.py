@@ -45,16 +45,24 @@ class _StubClient:
         self._file_id = file_id
         self._raise = raise_on_clone
 
-    def upload_clone_audio(self, audio, *, filename, content_type):
+    def upload_clone_audio(self, audio, *, filename, content_type, purpose="voice_clone"):
         self.uploaded.append(
-            {"size": len(audio), "filename": filename, "content_type": content_type},
+            {"size": len(audio), "filename": filename,
+             "content_type": content_type, "purpose": purpose},
         )
+        # Hand out a fresh id per upload so the two purposes get
+        # distinguishable file_ids — matching the real API.
+        self._file_id += 1
         return self._file_id
 
-    def voice_clone(self, *, file_id, voice_id, prompt_text=None, model="speech-2.6-hd"):
+    def voice_clone(
+        self, *, file_id, voice_id, prompt_text=None,
+        prompt_audio_id=None, model="speech-2.6-hd",
+    ):
         self.cloned.append(
             {"file_id": file_id, "voice_id": voice_id,
-             "prompt_text": prompt_text, "model": model},
+             "prompt_text": prompt_text,
+             "prompt_audio_id": prompt_audio_id, "model": model},
         )
         if self._raise:
             raise self._raise
@@ -65,17 +73,78 @@ class _StubClient:
         return b"\xff\xfb\x90\x00fake-mp3-bytes"
 
 
-def test_clone_voice_uploads_then_registers() -> None:
-    client = _StubClient(file_id=99)
+def test_clone_voice_uploads_only_main_sample_by_default() -> None:
+    """Without prompt_audio + prompt_text, only the main voice_clone
+    sample is uploaded — clone_prompt is omitted from the register call.
+    This is the common path for the WebUI's CloneWizard (the user's
+    full read-aloud recording is the main sample; no separate < 8 s
+    aligned snippet is supplied)."""
+    client = _StubClient(file_id=98)  # _StubClient pre-increments
     result = clone_voice(
         client, audio=b"audio-data" * 100, voice_id="my_voice_01",
-        filename="x.mp3", prompt_text="hello",
+        filename="x.mp3",
     )
     assert result["voice_id"] == "my_voice_01"
-    assert result["file_id"] == 99
+    assert len(client.uploaded) == 1
     assert client.uploaded[0]["filename"] == "x.mp3"
-    assert client.cloned[0]["prompt_text"] == "hello"
-    assert client.cloned[0]["file_id"] == 99
+    assert client.uploaded[0]["purpose"] == "voice_clone"
+    assert result["file_id"] == 99
+    assert result["prompt_audio_id"] is None
+    assert client.cloned[0]["prompt_text"] is None
+    assert client.cloned[0]["prompt_audio_id"] is None
+
+
+def test_clone_voice_uploads_separate_prompt_audio_when_provided() -> None:
+    """When the caller provides both prompt_audio bytes AND prompt_text
+    (the < 8 s aligned snippet + its transcript, per MiniMax docs), the
+    helper uploads the two samples with distinct purposes and threads
+    each file_id into the right voice_clone field."""
+    client = _StubClient(file_id=500)
+    result = clone_voice(
+        client,
+        audio=b"main-sample" * 200, voice_id="paired_v1",
+        filename="main.mp3",
+        prompt_audio=b"short-snippet" * 5,
+        prompt_audio_filename="snippet.mp3",
+        prompt_text="参考片段的逐字稿",
+    )
+    assert len(client.uploaded) == 2
+    assert client.uploaded[0]["purpose"] == "voice_clone"
+    assert client.uploaded[0]["filename"] == "main.mp3"
+    assert client.uploaded[1]["purpose"] == "prompt_audio"
+    assert client.uploaded[1]["filename"] == "snippet.mp3"
+    # Distinct file_ids and the right one in each voice_clone field.
+    assert result["file_id"] == 501
+    assert result["prompt_audio_id"] == 502
+    assert client.cloned[0]["file_id"] == 501
+    assert client.cloned[0]["prompt_audio_id"] == 502
+    assert client.cloned[0]["prompt_text"] == "参考片段的逐字稿"
+
+
+def test_clone_voice_rejects_prompt_text_without_prompt_audio() -> None:
+    """Regression: prompt_text alone (no aligned < 8 s prompt_audio) is
+    the call-shape that triggered MiniMax's status 2013 in the wild.
+    The helper now refuses up-front rather than uploading and being
+    rejected over the wire."""
+    client = _StubClient()
+    with pytest.raises(ValueError, match="prompt_text and prompt_audio"):
+        clone_voice(
+            client, audio=b"audio-data" * 100, voice_id="v1",
+            prompt_text="只给文本不给参考音频",
+        )
+    assert client.uploaded == []
+
+
+def test_clone_voice_rejects_prompt_audio_without_prompt_text() -> None:
+    """Symmetric guard — prompt_audio without prompt_text is also a
+    malformed clone_prompt object."""
+    client = _StubClient()
+    with pytest.raises(ValueError, match="prompt_text and prompt_audio"):
+        clone_voice(
+            client, audio=b"audio-data" * 100, voice_id="v1",
+            prompt_audio=b"only-audio",
+        )
+    assert client.uploaded == []
 
 
 def test_clone_voice_rejects_invalid_voice_id() -> None:

@@ -209,13 +209,21 @@ async def clone(
 
     client = _build_minimax_client(cfg)
     try:
+        # NOTE: we deliberately do NOT forward `prompt_text` to MiniMax.
+        # MiniMax's `clone_prompt.prompt_text` is the transcript of a
+        # *separate* < 8 s reference snippet (uploaded with
+        # purpose=prompt_audio) — it's not the words spoken in the main
+        # ~minutes-long sample. Passing the user's full read-aloud
+        # script as prompt_text without an aligned < 8 s prompt_audio
+        # was the cause of "status 2013, file purpose not match" on the
+        # MiniMax side. The script stays in voices.json as user-facing
+        # metadata so the wizard's "what did I read?" view still works.
         result = clone_voice(
             client,
             audio=audio,
             voice_id=voice_id,
             filename=upload_filename,
             content_type=upload_content_type,
-            prompt_text=prompt_text,
             model=model,
         )
     except ValueError as e:
