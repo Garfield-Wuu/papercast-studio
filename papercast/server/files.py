@@ -124,6 +124,7 @@ _KNOWN_ARTIFACTS: tuple[tuple[str, str], ...] = (
     ("parsed", "parsed.json"),
     ("figures_meta", "figures/figures.json"),
     ("reading", "reading.json"),
+    ("reading_qa", "reading_qa.json"),
     ("slides_plan", "slides_plan.json"),
     ("script", "script.md"),
     ("pptx", "{paper_id}.pptx"),

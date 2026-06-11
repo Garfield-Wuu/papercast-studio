@@ -195,3 +195,79 @@ def test_real_reading_json_is_valid_if_present() -> None:
     assert isinstance(payload["fact_cards"], list)
     for card in payload["fact_cards"]:
         assert {"claim", "evidence", "page"} <= set(card)
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 enhanced fields: confidence + source_quote
+# ---------------------------------------------------------------------------
+
+
+def test_fact_card_has_confidence_default() -> None:
+    """FactCard created without explicit confidence defaults to 'medium'."""
+    card = FactCard(claim="Acc 95%", evidence="Tab. 2", page=6)
+    assert card.confidence == "medium"
+    assert card.source_quote == ""
+
+
+def test_parse_response_reads_confidence_and_source_quote() -> None:
+    """When the LLM emits confidence + source_quote, we parse them."""
+    payload = {
+        "literature_intro": "i", "research_question": "r", "methods": "m",
+        "findings": "f", "discussion": "d", "key_terms": [],
+        "fact_cards": [
+            {
+                "claim": "Acc 95.3%",
+                "evidence": "Tab. 2",
+                "page": 6,
+                "confidence": "high",
+                "source_quote": "Our method achieves 95.3% accuracy.",
+            },
+        ],
+    }
+    reading = parse_reading_response(json.dumps(payload))
+    assert reading.fact_cards[0].confidence == "high"
+    assert reading.fact_cards[0].source_quote == "Our method achieves 95.3% accuracy."
+
+
+def test_parse_response_backward_compatible() -> None:
+    """Old reading.json without confidence/source_quote parses fine."""
+    payload = {
+        "literature_intro": "i", "research_question": "r", "methods": "m",
+        "findings": "f", "discussion": "d", "key_terms": [],
+        "fact_cards": [
+            {"claim": "Old claim", "evidence": "p. 3", "page": 3},
+        ],
+    }
+    reading = parse_reading_response(json.dumps(payload))
+    assert reading.fact_cards[0].confidence == "medium"  # default
+    assert reading.fact_cards[0].source_quote == ""  # default
+
+
+def test_parse_response_rejects_invalid_confidence() -> None:
+    """If LLM emits an unknown confidence value, we normalise to medium."""
+    payload = {
+        "literature_intro": "i", "research_question": "r", "methods": "m",
+        "findings": "f", "discussion": "d", "key_terms": [],
+        "fact_cards": [
+            {
+                "claim": "x",
+                "evidence": "p. 1",
+                "page": 1,
+                "confidence": "certain",  # not in {high, medium, low}
+            },
+        ],
+    }
+    reading = parse_reading_response(json.dumps(payload))
+    assert reading.fact_cards[0].confidence == "medium"
+
+
+def test_prompt_contains_new_schema_fields() -> None:
+    """The built prompt should instruct the LLM to emit confidence and
+    source_quote."""
+    parsed = _stub_parsed()
+    figures = _stub_figures()
+    prompt = build_reading_prompt(parsed, figures)
+    assert "confidence" in prompt
+    assert "source_quote" in prompt
+    # Verify the schema block includes the new fields.
+    assert '"confidence": "high"' in prompt or "'confidence'" in prompt
