@@ -197,11 +197,66 @@ def _read_done_runner(cfg, paper_id):
 
     Skips the LLM call if reading.json already exists. Otherwise calls
     the configured Reader LLM via run_reading().
+
+    If reading.json exists but reading_qa.json is missing (e.g. after a
+    code update that added QA), re-run QA on the existing reading without
+    calling the LLM.
     """
+    import json
+    import logging
     from pathlib import Path
 
+    from papercast.reader.qa import run_reading_qa
+
+    logger = logging.getLogger(__name__)
+
     out = Path(cfg.paths.work) / paper_id / "reading.json"
+    qa_out = Path(cfg.paths.work) / paper_id / "reading_qa.json"
+
     if out.exists():
+        if qa_out.exists():
+            return
+        # reading.json exists but QA hasn't been run yet — run it now
+        # without an LLM call.
+        logger.info("reading.json exists but no QA report; re-running QA")
+        from papercast.reader.pipeline import _load_figures, _load_parsed
+
+        work = Path(cfg.paths.work) / paper_id
+        try:
+            parsed = _load_parsed(work / "parsed.json")
+            figures = _load_figures(work / "figures" / "figures.json")
+        except FileNotFoundError:
+            logger.warning("cannot re-run QA for %s: upstream artifacts missing", paper_id)
+            return
+        reading_payload = json.loads(out.read_text(encoding="utf-8"))
+        from papercast.reader.reading import (
+            FactCard,
+            FiveSectionReading,
+        )
+
+        reading = FiveSectionReading(
+            literature_intro=reading_payload["literature_intro"],
+            research_question=reading_payload["research_question"],
+            methods=reading_payload["methods"],
+            findings=reading_payload["findings"],
+            discussion=reading_payload["discussion"],
+            key_terms=list(reading_payload.get("key_terms", [])),
+            fact_cards=[
+                FactCard(
+                    claim=c["claim"],
+                    evidence=c["evidence"],
+                    page=int(c["page"]),
+                    confidence=str(c.get("confidence", "medium")),
+                    source_quote=str(c.get("source_quote", "")),
+                )
+                for c in reading_payload.get("fact_cards", [])
+            ],
+        )
+        qa_report = run_reading_qa(reading, parsed, figures, paper_id=paper_id)
+        from papercast.reader.pipeline import _write_qa_report
+        _write_qa_report(qa_report, qa_out)
+        if not qa_report.passed:
+            logger.warning("reading QA for %s: %s", paper_id, qa_report.summary)
         return
 
     from papercast.reader import pipeline

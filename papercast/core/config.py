@@ -101,7 +101,7 @@ class Slides(BaseModel):
     target_pages: tuple[int, int] = (12, 15)
     hard_max_pages: int = 17
     hard_min_pages: int = 10
-    speaking_rate_cpm: int = 220
+    speaking_rate_cpm: int = 260
     target_duration_sec: tuple[int, int] = (420, 540)
     # P9: choose between the legacy "text_blocks" extractor and the
     # Method D "visual_cluster" extractor (caption-anchored cluster of

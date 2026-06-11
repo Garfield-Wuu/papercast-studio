@@ -60,7 +60,17 @@ def run_figures(cfg: Config, paper_id: str) -> None:
 
 
 def run_reading(cfg: Config, paper_id: str, reader: LLMReader) -> None:
-    """figures_split → read_done: produce the five-section reading.json."""
+    """figures_split → read_done: produce the five-section reading.json.
+
+    After generation, runs programmatic QA (no additional LLM cost) and
+    writes reading_qa.json alongside the reading for the review panel.
+    """
+    import logging
+
+    from papercast.reader.qa import run_reading_qa
+
+    logger = logging.getLogger(__name__)
+
     work = Path(cfg.paths.work) / paper_id
     parsed_path = work / "parsed.json"
     figures_path = work / "figures" / "figures.json"
@@ -73,10 +83,30 @@ def run_reading(cfg: Config, paper_id: str, reader: LLMReader) -> None:
     reading = read_paper(parsed, figures, reader=reader)
     write_reading(reading, work / "reading.json")
 
+    # Programmatic QA — no additional LLM cost.
+    qa_report = run_reading_qa(reading, parsed, figures, paper_id=paper_id)
+    _write_qa_report(qa_report, work / "reading_qa.json")
+    if not qa_report.passed:
+        logger.warning("reading QA for %s: %s", paper_id, qa_report.summary)
+    else:
+        logger.info("reading QA for %s: all checks passed", paper_id)
+
 
 # ---------------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------------
+
+
+def _write_qa_report(report, out_path: Path) -> None:
+    """Persist a ReadingQAReport to disk as JSON."""
+    import json
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(report.to_dict(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def _load_parsed(path: Path) -> ParsedDocument:

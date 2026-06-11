@@ -150,7 +150,13 @@ def build_planner_prompt(
 
 ## 目标页数与时长
 - 总页数目标：{target_pages[0]}–{target_pages[1]} 页（硬上下限：10–17）
-- 目标总时长：{target_duration_sec} 秒（按 220 字/分钟估算）
+- 目标总时长：{target_duration_sec} 秒（按 260 字/分钟估算）
+
+## 语言策略
+- **所有页面内容必须使用中文**：标题、bullet、字段值全部用中文填写
+- 页面标题全部使用中文；Cover 页可保留中英双语标题
+- 图表引用保留英文 ID，但用中文描述（如「整体架构图（fig_1）」）
+- 禁止中英混杂的 bullet——术语可保留英文缩写但需加中文解释
 
 ## Cover 字段（务必填到第 1 页 layout=Cover 的 fields 里）
 {cover_block}
@@ -182,6 +188,7 @@ def build_planner_prompt(
 - 每个 page 的 `layout` 必须出现在上面 schema 列表里
 - `fields` 的 key 必须出现在该 layout 的 placeholder 列表里
 - 引用图表时使用 `figures.json` 里的 `id`，写到 `image_id`/`figure_id` 字段
+- 所有字段值用中文填写（标题、bullet、描述等）
 - JSON 字符串值内**禁止**出现未转义的 ASCII 双引号 (")。中文引用请使用「」或《》；
   如必须使用 ASCII 双引号则必须转义为 \"。不允许尾随逗号。输出必须通过 `json.loads` 解析。
 """

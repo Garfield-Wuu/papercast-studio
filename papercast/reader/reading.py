@@ -34,6 +34,8 @@ class FactCard:
     claim: str
     evidence: str  # e.g. "Fig. 3" / "Tab. 2" / "p. 6"
     page: int  # 1-indexed; 0 if not localizable
+    confidence: str = "medium"  # "high" | "medium" | "low" — traceability assessment
+    source_quote: str = ""  # original text excerpt for quick fact-checking
 
 
 @dataclass(frozen=True)
@@ -111,10 +113,16 @@ def parse_reading_response(raw: str) -> FiveSectionReading:
         for k in ("claim", "evidence", "page"):
             if k not in raw_card:
                 raise ValueError(f"fact_card missing {k!r}: {raw_card}")
+        confidence = str(raw_card.get("confidence", "medium"))
+        if confidence not in ("high", "medium", "low"):
+            confidence = "medium"
+        source_quote = str(raw_card.get("source_quote", ""))
         cards.append(FactCard(
             claim=str(raw_card["claim"]),
             evidence=str(raw_card["evidence"]),
             page=int(raw_card["page"]),
+            confidence=confidence,
+            source_quote=source_quote,
         ))
     return FiveSectionReading(
         literature_intro=str(payload["literature_intro"]),
@@ -141,7 +149,13 @@ _SCHEMA_BLOCK = """\
   "discussion":        "200-300 chars: author discussion + your critique (limits, future work)",
   "key_terms":         ["term1", "term2"],
   "fact_cards": [
-    {"claim": "concrete numeric claim", "evidence": "Fig. 3 / Tab. 2 / p. 6", "page": 6}
+    {
+      "claim": "concrete numeric claim (Chinese)",
+      "evidence": "Fig. 3 / Tab. 2 / p. 6",
+      "page": 6,
+      "confidence": "high",
+      "source_quote": "original sentence from the paper containing this number"
+    }
   ]
 }"""
 

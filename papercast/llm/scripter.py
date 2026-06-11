@@ -118,6 +118,12 @@ def build_scripter_prompt(
     )
     reading_json = json.dumps(asdict(reading), ensure_ascii=False, indent=2)
 
+    total_pages = len(plan.pages)
+    total_chars_min = int(speaking_rate_cpm * target_duration_sec[0] / 60)
+    total_chars_max = int(speaking_rate_cpm * target_duration_sec[1] / 60)
+    chars_per_page_min = max(30, total_chars_min // total_pages)
+    chars_per_page_max = total_chars_max // total_pages + 20
+
     return f"""\
 {template}
 
@@ -137,14 +143,17 @@ def build_scripter_prompt(
 
 ## 时长预算
 - 语速估算：{speaking_rate_cpm} 字 / 分钟
-- 目标总时长：{target_duration_sec[0]}–{target_duration_sec[1]} 秒
-- 总页数：{len(plan.pages)} 页
+- 目标总时长：{target_duration_sec[0]}–{target_duration_sec[1]} 秒（约 {target_duration_sec[0]//60}–{target_duration_sec[1]//60} 分钟）
+- 总页数：{total_pages} 页
+- 总字数目标：{total_chars_min}–{total_chars_max} 字
+- 单页讲稿目标：{chars_per_page_min}–{chars_per_page_max} 字（内容页靠上限，封面/结束页可靠近下限）
 
 ---
 
 # 输出要求
 
 按 `## Page N` 的顺序逐页输出讲稿，**Page 编号必须与 slides_plan 完全一致**。
+每页讲稿需包含衔接、解释、解读三个要素（见上方逐页讲稿契约）。
 末尾追加一段 metadata fence：
 
 ```markdown
