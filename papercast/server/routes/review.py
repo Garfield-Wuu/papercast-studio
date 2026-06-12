@@ -22,7 +22,11 @@ from papercast.core.db import Database
 from ..deps import get_cfg, get_db
 from ..review_service import (
     ApprovalError,
+    RebuildConflictError,
     apply_approval,
+    rebuild_from_plan,
+    recut_figures,
+    refresh_from_disk,
     regenerate_reading,
     regenerate_script_pages,
     regenerate_slides_pages,
@@ -239,3 +243,181 @@ def regenerate_preview(
         return {"target": "script", "prompts": prompts}
 
     raise HTTPException(400, f"unknown target: {body.target}")
+
+
+# ---------------------------------------------------------------------------
+# Refresh-from-disk — surface user-edited PPT/script in the Review tab
+# ---------------------------------------------------------------------------
+
+
+class RefreshFromDiskResponse(BaseModel):
+    paper_id: str
+    slides: list[dict[str, Any]]
+    manual_override: dict[str, Any]
+    mtimes: dict[str, str | None]
+
+
+@router.post("/refresh-from-disk", response_model=RefreshFromDiskResponse)
+def refresh_from_disk_route(
+    paper_id: str,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
+) -> RefreshFromDiskResponse:
+    """Re-read on-disk artifacts and re-render slide thumbnails.
+
+    Use case: the reviewer downloaded the .pptx, edited it in PowerPoint,
+    saved it back into ``work/<pid>/<pid>.pptx`` (and possibly tweaked
+    ``script.md``), and now wants the Review tab to reflect those edits.
+
+    Side effect: writes ``review/<pid>/manual_override.json`` so the
+    subsequent ``apply_approval`` call publishes the user-edited deck
+    instead of re-assembling it from the template.
+
+    Returns the new slide PNG list + mtimes for cache-busting on the
+    client.
+    """
+    if db.get_paper(paper_id) is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    try:
+        result = refresh_from_disk(cfg, paper_id)
+    except FileNotFoundError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return RefreshFromDiskResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# Rebuild — re-assemble .pptx from edited slides_plan/script
+# ---------------------------------------------------------------------------
+
+
+class RebuildRequest(BaseModel):
+    force: bool = Field(
+        default=False,
+        description=(
+            "When manual_override is set, rebuild would overwrite the "
+            "user's hand-edited .pptx. Pass force=true to proceed anyway "
+            "(the WebUI surfaces a confirm dialog before re-submitting "
+            "with this flag)."
+        ),
+    )
+
+
+class RebuildResponse(BaseModel):
+    paper_id: str
+    slides: list[dict[str, Any]]
+    manual_override_cleared: bool
+    mtimes: dict[str, str | None]
+
+
+@router.post(
+    "/rebuild",
+    response_model=RebuildResponse,
+    responses={
+        409: {
+            "description": (
+                "slides_plan.json/script.md missing, OR manual_override "
+                "is set and force=false. The error detail starts with "
+                "'manual_override:' for the override-conflict case so "
+                "the WebUI can distinguish it from a missing-artifact "
+                "409."
+            ),
+        },
+    },
+)
+def rebuild_route(
+    paper_id: str,
+    body: RebuildRequest,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
+) -> RebuildResponse:
+    """Re-assemble work/<pid>/<pid>.pptx from slides_plan.json + script.md
+    and re-render the preview thumbnails.
+
+    Use case: the reviewer edited a page's JSON or script via the WebUI's
+    PageEditDialog. Those PUTs only touched the JSON / Markdown — the
+    .pptx and its PNG thumbnails still reflect the prior version. This
+    route brings them back into sync.
+
+    Refuses with 409 (detail starts with "manual_override:") when the
+    paper has manual_override set, unless ``force=true``. The override
+    indicates the user previously hand-edited the .pptx in PowerPoint;
+    rebuilding from JSON would silently discard those edits.
+    """
+    if db.get_paper(paper_id) is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    try:
+        result = rebuild_from_plan(cfg, paper_id, force_override=body.force)
+    except RebuildConflictError as e:
+        raise HTTPException(409, f"manual_override: {e}")
+    except FileNotFoundError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return RebuildResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# Recut figures — re-run the figure extractor and refresh figures.json
+# ---------------------------------------------------------------------------
+
+
+class RecutFiguresRequest(BaseModel):
+    mode: str | None = Field(
+        default=None,
+        description=(
+            "Optional override for the figure-extraction mode. One of "
+            "'text_blocks' or 'visual_cluster'; None uses the config "
+            "default (cfg.slides.figure_extractor)."
+        ),
+    )
+
+
+class RecutFiguresResponse(BaseModel):
+    paper_id: str
+    figures_count: int
+    mode: str | None
+    removed_orphans: list[str]
+    referenced_missing: list[dict[str, Any]]
+    backup: str | None
+
+
+@router.post(
+    "/recut-figures",
+    response_model=RecutFiguresResponse,
+)
+def recut_figures_route(
+    paper_id: str,
+    body: RecutFiguresRequest,
+    cfg: Config = Depends(get_cfg),
+    db: Database = Depends(get_db),
+) -> RecutFiguresResponse:
+    """Re-run figures_split end-to-end and refresh figures.json.
+
+    Use case: the reviewer is unhappy with the auto-extracted figure
+    crops (wrong bbox, missing figure, bad caption match). Per-figure
+    rerun (POST /papers/{pid}/figures/{fid}/rerun) handles single
+    fixes; this is the whole-set version, useful when the underlying
+    detector / extractor mode was tweaked.
+
+    Side effects:
+      - figures.json is backed up to .history/ before being rewritten
+      - orphan figure_*.png files (no longer in the new figures.json)
+        are removed; paper_first_page.png is preserved
+      - slides_plan.json is scanned for image_id / figure_id refs that
+        no longer resolve — surfaced via `referenced_missing` so the
+        WebUI can prompt the user to fix the plan.
+
+    Returns the new figure count + the list of orphan files removed +
+    pages whose plan still references missing ids.
+    """
+    if db.get_paper(paper_id) is None:
+        raise HTTPException(404, f"unknown paper {paper_id}")
+    try:
+        result = recut_figures(cfg, paper_id, mode=body.mode)
+    except FileNotFoundError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return RecutFiguresResponse(**result)

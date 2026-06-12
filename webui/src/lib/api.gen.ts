@@ -569,6 +569,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/papers/{paper_id}/review/refresh-from-disk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh From Disk Route
+         * @description Re-read on-disk artifacts and re-render slide thumbnails.
+         *
+         *     Use case: the reviewer downloaded the .pptx, edited it in PowerPoint,
+         *     saved it back into ``work/<pid>/<pid>.pptx`` (and possibly tweaked
+         *     ``script.md``), and now wants the Review tab to reflect those edits.
+         *
+         *     Side effect: writes ``review/<pid>/manual_override.json`` so the
+         *     subsequent ``apply_approval`` call publishes the user-edited deck
+         *     instead of re-assembling it from the template.
+         *
+         *     Returns the new slide PNG list + mtimes for cache-busting on the
+         *     client.
+         */
+        post: operations["refresh_from_disk_route_api_papers__paper_id__review_refresh_from_disk_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/papers/{paper_id}/review/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rebuild Route
+         * @description Re-assemble work/<pid>/<pid>.pptx from slides_plan.json + script.md
+         *     and re-render the preview thumbnails.
+         *
+         *     Use case: the reviewer edited a page's JSON or script via the WebUI's
+         *     PageEditDialog. Those PUTs only touched the JSON / Markdown — the
+         *     .pptx and its PNG thumbnails still reflect the prior version. This
+         *     route brings them back into sync.
+         *
+         *     Refuses with 409 (detail starts with "manual_override:") when the
+         *     paper has manual_override set, unless ``force=true``. The override
+         *     indicates the user previously hand-edited the .pptx in PowerPoint;
+         *     rebuilding from JSON would silently discard those edits.
+         */
+        post: operations["rebuild_route_api_papers__paper_id__review_rebuild_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/papers/{paper_id}/review/recut-figures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recut Figures Route
+         * @description Re-run figures_split end-to-end and refresh figures.json.
+         *
+         *     Use case: the reviewer is unhappy with the auto-extracted figure
+         *     crops (wrong bbox, missing figure, bad caption match). Per-figure
+         *     rerun (POST /papers/{pid}/figures/{fid}/rerun) handles single
+         *     fixes; this is the whole-set version, useful when the underlying
+         *     detector / extractor mode was tweaked.
+         *
+         *     Side effects:
+         *       - figures.json is backed up to .history/ before being rewritten
+         *       - orphan figure_*.png files (no longer in the new figures.json)
+         *         are removed; paper_first_page.png is preserved
+         *       - slides_plan.json is scanned for image_id / figure_id refs that
+         *         no longer resolve — surfaced via `referenced_missing` so the
+         *         WebUI can prompt the user to fix the plan.
+         *
+         *     Returns the new figure count + the list of orphan files removed +
+         *     pages whose plan still references missing ids.
+         */
+        post: operations["recut_figures_route_api_papers__paper_id__review_recut_figures_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voice/list": {
         parameters: {
             query?: never;
@@ -1075,6 +1174,72 @@ export interface components {
              * @default speech-2.6-hd
              */
             model: string;
+        };
+        /** RebuildRequest */
+        RebuildRequest: {
+            /**
+             * Force
+             * @description When manual_override is set, rebuild would overwrite the user's hand-edited .pptx. Pass force=true to proceed anyway (the WebUI surfaces a confirm dialog before re-submitting with this flag).
+             * @default false
+             */
+            force: boolean;
+        };
+        /** RebuildResponse */
+        RebuildResponse: {
+            /** Paper Id */
+            paper_id: string;
+            /** Slides */
+            slides: {
+                [key: string]: unknown;
+            }[];
+            /** Manual Override Cleared */
+            manual_override_cleared: boolean;
+            /** Mtimes */
+            mtimes: {
+                [key: string]: string | null;
+            };
+        };
+        /** RecutFiguresRequest */
+        RecutFiguresRequest: {
+            /**
+             * Mode
+             * @description Optional override for the figure-extraction mode. One of 'text_blocks' or 'visual_cluster'; None uses the config default (cfg.slides.figure_extractor).
+             */
+            mode?: string | null;
+        };
+        /** RecutFiguresResponse */
+        RecutFiguresResponse: {
+            /** Paper Id */
+            paper_id: string;
+            /** Figures Count */
+            figures_count: number;
+            /** Mode */
+            mode: string | null;
+            /** Removed Orphans */
+            removed_orphans: string[];
+            /** Referenced Missing */
+            referenced_missing: {
+                [key: string]: unknown;
+            }[];
+            /** Backup */
+            backup: string | null;
+        };
+        /** RefreshFromDiskResponse */
+        RefreshFromDiskResponse: {
+            /** Paper Id */
+            paper_id: string;
+            /** Slides */
+            slides: {
+                [key: string]: unknown;
+            }[];
+            /** Manual Override */
+            manual_override: {
+                [key: string]: unknown;
+            };
+            /** Mtimes */
+            mtimes: {
+                [key: string]: string | null;
+            };
         };
         /** RegenerateRequest */
         RegenerateRequest: {
@@ -2144,6 +2309,114 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_from_disk_route_api_papers__paper_id__review_refresh_from_disk_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paper_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefreshFromDiskResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebuild_route_api_papers__paper_id__review_rebuild_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paper_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RebuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RebuildResponse"];
+                };
+            };
+            /** @description slides_plan.json/script.md missing, OR manual_override is set and force=false. The error detail starts with 'manual_override:' for the override-conflict case so the WebUI can distinguish it from a missing-artifact 409. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recut_figures_route_api_papers__paper_id__review_recut_figures_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                paper_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecutFiguresRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecutFiguresResponse"];
                 };
             };
             /** @description Validation Error */

@@ -1,16 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
-import { Pencil, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Pencil, RefreshCw, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { ReviewItem } from "@/components/review/ReviewItem";
 import { PageEditDialog } from "@/components/review/PageEditDialog";
 import { useTextArtifact, usePutArtifact } from "@/hooks/useArtifact";
-import { usePreviewRender } from "@/hooks/useFigures";
+import { usePreviewRender, useRebuildSlides } from "@/hooks/useFigures";
 import type { useReviewState } from "@/hooks/useReviewState";
 import { cn } from "@/lib/cn";
 
 interface Props {
   paperId: string;
   review: ReturnType<typeof useReviewState>;
+  /**
+   * Bumped by the parent (ReviewPanel) when the user clicks
+   * "刷新页面（已手改）". On change we re-fetch slide thumbnails (the
+   * server has wiped slides_png/, so the next preview-render call will
+   * re-render the user-edited .pptx) and the script artifact query is
+   * invalidated upstream. Cache-bust the <img src> so the browser
+   * doesn't serve stale PNGs from disk cache.
+   */
+  refreshToken?: number;
 }
 
 interface PageSpec {
@@ -34,6 +43,26 @@ interface PageBody {
 
 const HEADER_RE = /^##\s*Page\s+(\d+)\s*$/gm;
 const METADATA_FENCE_RE = /^-{3,}\s*$/m;
+
+/**
+ * Deterministic JSON serializer for diff comparisons. Sorts object
+ * keys recursively so two structurally-equal field dicts produce the
+ * same string regardless of insertion order. Arrays preserve their
+ * order — slide bullets are positional.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return "[" + value.map(stableStringify).join(",") + "]";
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return (
+    "{" +
+    keys.map((k) => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",") +
+    "}"
+  );
+}
 
 /**
  * Parse script.md client-side into per-page bodies. Mirrors
@@ -109,17 +138,26 @@ function rebuildScript(pages: { page_no: number; body: string }[], original: str
  * raw JSON or Markdown, so the slides_plan / script.md grammar stays
  * intact even with hundreds of small edits.
  */
-export function SlidesScriptTab({ paperId, review }: Props) {
+export function SlidesScriptTab({ paperId, review, refreshToken = 0 }: Props) {
   const planQuery = useTextArtifact(paperId, "slides_plan");
   const scriptQuery = useTextArtifact(paperId, "script");
   const putArtifact = usePutArtifact();
   const previewRender = usePreviewRender();
+  const rebuildSlides = useRebuildSlides();
 
   const [editingPage, setEditingPage] = useState<number | null>(null);
+  // Inline error from the initial preview-render fetch — used to be
+  // swallowed silently, which made the buttons feel "dead" when they
+  // had actually returned 409. Now we surface it under the action bar.
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  // Per-row spinner / error for "重做本页" (single-page rebuild).
+  const [rebuildingPage, setRebuildingPage] = useState<number | null>(null);
+  const [rebuildError, setRebuildError] = useState<string | null>(null);
 
   const [previews, setPreviews] = useState<Map<number, string>>(new Map());
   useEffect(() => {
     let cancelled = false;
+    setPreviewError(null);
     previewRender
       .mutateAsync(paperId)
       .then((r) => {
@@ -128,14 +166,24 @@ export function SlidesScriptTab({ paperId, review }: Props) {
         for (const s of r.slides) m.set(s.page_no, s.url);
         setPreviews(m);
       })
-      .catch(() => {
-        // Silent: 409 means slides_png missing AND no .pptx; user can click button.
+      .catch((err: Error) => {
+        if (cancelled) return;
+        // 409 means the .pptx hasn't been assembled yet — common on
+        // first paint before assemble_pptx runs. We hint at the button
+        // rather than blowing up.
+        const msg = err.message || String(err);
+        setPreviewError(
+          /409|missing/i.test(msg)
+            ? "尚未生成 PPT 文件，先点上方「渲染 PPT 缩略图」"
+            : `缩略图加载失败：${msg}`,
+        );
       });
     return () => {
       cancelled = true;
     };
+    // refreshToken bumps re-trigger this on user-initiated 刷新.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paperId]);
+  }, [paperId, refreshToken]);
 
   const plan = useMemo<SlidesPlan | null>(() => {
     if (!planQuery.data?.content) return null;
@@ -155,14 +203,117 @@ export function SlidesScriptTab({ paperId, review }: Props) {
     return m;
   }, [scriptQuery.data?.content]);
 
+  // ---- dirty detection ---------------------------------------------------
+  //
+  // We snapshot the first non-empty plan/script we see and treat any
+  // later divergence as "this page was edited". The snapshot persists
+  // through artifact refetches (PUT triggers invalidateQueries; the
+  // query refetches; the new content matches the snapshot iff the user
+  // saved exactly what was already there).
+  //
+  // Shape comparison: stable JSON stringify of `fields` + the page's
+  // script body. This is good enough — PageEditDialog preserves key
+  // order from the original `fields` object, so a no-op edit produces
+  // byte-equal JSON.
+  const initialFieldsRef = useRef<Map<number, string>>(new Map());
+  const initialScriptRef = useRef<Map<number, string>>(new Map());
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    if (initializedRef.current) return;
+    if (!plan || !scriptQuery.data?.content) return;
+    const fieldsMap = new Map<number, string>();
+    for (const p of plan.pages) {
+      fieldsMap.set(p.page_no, stableStringify(p.fields));
+    }
+    initialFieldsRef.current = fieldsMap;
+    initialScriptRef.current = new Map(scriptByPage);
+    initializedRef.current = true;
+  }, [plan, scriptQuery.data?.content, scriptByPage]);
+
+  // Recompute dirty set whenever plan or script changes. Driven by an
+  // effect (not a memo) so it can dispatch into the review reducer.
+  useEffect(() => {
+    if (!initializedRef.current || !plan) return;
+    const initFields = initialFieldsRef.current;
+    const initScript = initialScriptRef.current;
+    for (const p of plan.pages) {
+      const curFields = stableStringify(p.fields);
+      const curScript = scriptByPage.get(p.page_no) ?? "";
+      const baseFields = initFields.get(p.page_no);
+      const baseScript = initScript.get(p.page_no) ?? "";
+      const dirty =
+        baseFields !== undefined &&
+        (curFields !== baseFields || curScript !== baseScript);
+      if (dirty) {
+        review.markDirty(p.page_no);
+      } else {
+        review.clearDirty(p.page_no);
+      }
+    }
+    // review is intentionally excluded — we only react to artifact changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan, scriptByPage]);
+
   const renderThumbnails = () => {
+    setPreviewError(null);
     previewRender.mutate(paperId, {
       onSuccess: (r) => {
         const m = new Map<number, string>();
         for (const s of r.slides) m.set(s.page_no, s.url);
         setPreviews(m);
       },
+      onError: (err) => {
+        setPreviewError(err.message || String(err));
+      },
     });
+  };
+
+  // ---- rebuild a single page --------------------------------------------
+  //
+  // Server-side rebuild always re-assembles the whole .pptx (assemble_pptx
+  // is monolithic). To the user this is the cheapest correct semantics:
+  // their per-page edits are reflected, but other pages stay byte-equal
+  // because the JSON didn't change there.
+  //
+  // 409 with "manual_override:" prefix → confirm dialog → re-submit with
+  // force=true. Any other 4xx surfaces inline.
+  const rebuildPage = async (pageNo: number) => {
+    setRebuildError(null);
+    setRebuildingPage(pageNo);
+    try {
+      let res = await rebuildSlides
+        .mutateAsync({ paperId, force: false })
+        .catch(async (err: Error) => {
+          if (/manual_override:/.test(err.message)) {
+            const ok = window.confirm(
+              "此 PPT 之前被标记为「手改版」。重做会用当前 JSON / 讲稿覆盖手改内容，确认继续？",
+            );
+            if (!ok) throw new Error("已取消");
+            return rebuildSlides.mutateAsync({ paperId, force: true });
+          }
+          throw err;
+        });
+      const m = new Map<number, string>();
+      for (const s of res.slides) m.set(s.page_no, s.url);
+      setPreviews(m);
+      // The page is no longer dirty — its on-disk JSON now drives the
+      // rendered .pptx. Promote the current values to the new baseline
+      // so further edits start fresh.
+      if (plan) {
+        const target = plan.pages.find((p) => p.page_no === pageNo);
+        if (target) {
+          initialFieldsRef.current.set(pageNo, stableStringify(target.fields));
+          initialScriptRef.current.set(pageNo, scriptByPage.get(pageNo) ?? "");
+        }
+      }
+      review.clearDirty(pageNo);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg !== "已取消") setRebuildError(`重做失败：${msg}`);
+    } finally {
+      setRebuildingPage(null);
+    }
   };
 
   const savePage = async (
@@ -224,7 +375,7 @@ export function SlidesScriptTab({ paperId, review }: Props) {
       {/* Action bar */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-fg-muted">
-          共 {plan.total_pages} 页 · 左侧 PPT 缩略图，右侧讲稿。逐页对照：勾选不通过 + 写反馈交给 LLM 重生；点铅笔图标可以单页对照编辑。
+          共 {plan.total_pages} 页 · 左侧 PPT 缩略图，右侧讲稿。点铅笔图标编辑单页；保存后该页右上角的「重做本页」会亮起。
         </p>
         <Button
           variant="ghost"
@@ -242,16 +393,36 @@ export function SlidesScriptTab({ paperId, review }: Props) {
         </Button>
       </div>
 
+      {(previewError || rebuildError) && (
+        <p className="text-xs text-danger" role="alert">
+          {rebuildError ?? previewError}
+        </p>
+      )}
+
       {/* Per-page rows */}
       <div className="space-y-3">
         {plan.pages.map((page) => {
           const item = review.itemFor("slides", page.page_no);
           const thumbUrl = previews.get(page.page_no);
           const scriptBody = scriptByPage.get(page.page_no) ?? "";
+          const isDirty = review.isDirty(page.page_no);
+          const isRebuildingThis = rebuildingPage === page.page_no;
           return (
             <ReviewItem
               key={page.page_no}
-              label={`Page ${page.page_no} · ${page.layout}`}
+              label={
+                <span className="inline-flex items-center gap-2">
+                  {`Page ${page.page_no} · ${page.layout}`}
+                  {isDirty && (
+                    <span
+                      className="rounded-full px-1.5 py-0.5 text-[10px] bg-info/20 text-info shrink-0"
+                      title="本页 JSON / 讲稿已修改，尚未应用到 PPT"
+                    >
+                      已修改
+                    </span>
+                  )}
+                </span>
+              }
               meta={
                 scriptBody
                   ? `${scriptBody.length} 字 · 约 ${Math.round((scriptBody.length / 220) * 60)} 秒`
@@ -263,15 +434,35 @@ export function SlidesScriptTab({ paperId, review }: Props) {
               onFeedbackChange={(v) => review.setFeedback("slides", page.page_no, v)}
               feedbackPlaceholder="如：第三条 bullet 的数字写错了；讲稿里改用「具体而言」过渡"
               actions={
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  aria-label={`对照编辑 Page ${page.page_no}`}
-                  title="对照编辑本页（不影响其它页）"
-                  onClick={() => setEditingPage(page.page_no)}
-                >
-                  <Pencil size={14} />
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    variant={isDirty ? "secondary" : "ghost"}
+                    aria-label={`重做 Page ${page.page_no}`}
+                    title={
+                      isDirty
+                        ? "用当前 JSON / 讲稿重新生成本页缩略图（约 30 秒）"
+                        : "本页未修改"
+                    }
+                    onClick={() => rebuildPage(page.page_no)}
+                    disabled={!isDirty || rebuildingPage !== null}
+                  >
+                    <Wand2
+                      size={14}
+                      className={isRebuildingThis ? "animate-spin" : ""}
+                    />
+                    {isRebuildingThis ? "重做中…" : "重做本页"}
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label={`对照编辑 Page ${page.page_no}`}
+                    title="对照编辑本页（不影响其它页）"
+                    onClick={() => setEditingPage(page.page_no)}
+                  >
+                    <Pencil size={14} />
+                  </Button>
+                </>
               }
             >
               <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr] gap-4">
@@ -286,7 +477,7 @@ export function SlidesScriptTab({ paperId, review }: Props) {
                       className="block"
                     >
                       <img
-                        src={thumbUrl + "&_t=" + (planQuery.data?.mtime ?? "")}
+                        src={thumbUrl + "&_t=" + (planQuery.data?.mtime ?? "") + "&_r=" + refreshToken}
                         alt={`Page ${page.page_no} 缩略图`}
                         className="block w-full h-auto bg-bg"
                       />

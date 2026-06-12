@@ -93,3 +93,109 @@ export function usePreviewRender() {
     },
   });
 }
+
+
+// ---- rebuild from edited slides_plan/script ---------------------------
+
+/**
+ * POST /api/papers/{pid}/review/rebuild.
+ *
+ * Re-assembles work/<pid>/<pid>.pptx from the (possibly edited)
+ * slides_plan.json + script.md, then re-renders preview thumbnails.
+ *
+ * Use case: the reviewer edited a page's JSON or script through the
+ * WebUI's PageEditDialog. Those PUTs only touch the JSON / Markdown —
+ * the assembled .pptx and its thumbnails still reflect the prior
+ * version. This call brings them back in sync.
+ *
+ * 409 with detail starting "manual_override:" means the paper was
+ * previously marked as hand-edited (refresh-from-disk). The caller
+ * should surface a confirm dialog and re-submit with `force: true`
+ * to overwrite the hand edits with the JSON-derived rebuild.
+ */
+export interface RebuildSlide {
+  page_no: number;
+  filename: string;
+  url: string;
+}
+
+export interface RebuildResponse {
+  paper_id: string;
+  slides: RebuildSlide[];
+  manual_override_cleared: boolean;
+  mtimes: {
+    pptx: string | null;
+    script: string | null;
+    figures_meta: string | null;
+  };
+}
+
+interface RebuildArgs {
+  paperId: string;
+  force?: boolean;
+}
+
+export function useRebuildSlides() {
+  const qc = useQueryClient();
+  return useMutation<RebuildResponse, Error, RebuildArgs>({
+    mutationFn: ({ paperId, force = false }) =>
+      api.post<RebuildResponse>(`/papers/${paperId}/review/rebuild`, { force }),
+    onSuccess: (_, { paperId }) => {
+      // The .pptx changed; downstream artifact reads should refetch.
+      qc.invalidateQueries({ queryKey: ["artifact", paperId] });
+      qc.invalidateQueries({ queryKey: ["preview-render", paperId] });
+      qc.invalidateQueries({ queryKey: ["paper", paperId] });
+    },
+  });
+}
+
+
+// ---- recut figures (whole-set re-extraction) --------------------------
+
+/**
+ * POST /api/papers/{pid}/review/recut-figures.
+ *
+ * Re-runs the figure extractor end-to-end and rewrites figures.json.
+ * Use case: the reviewer is unhappy with the auto-extracted crops as
+ * a whole. Per-figure rerun (useRerunFigure) handles single fixes;
+ * this is the global version.
+ *
+ * The response surfaces:
+ *   - removed_orphans: PNGs that were swept up
+ *   - referenced_missing: pages whose slides_plan still points at
+ *     figure ids that no longer exist (consumer warns the user)
+ *   - mode: the extractor mode actually used
+ *   - backup: path to the .history snapshot of the old figures.json
+ */
+export interface RecutFiguresResponse {
+  paper_id: string;
+  figures_count: number;
+  mode: string | null;
+  removed_orphans: string[];
+  referenced_missing: { page_no: number; ids: string[] }[];
+  backup: string | null;
+}
+
+interface RecutFiguresArgs {
+  paperId: string;
+  /** Optional override for cfg.slides.figure_extractor */
+  mode?: "text_blocks" | "visual_cluster";
+}
+
+export function useRecutFigures() {
+  const qc = useQueryClient();
+  return useMutation<RecutFiguresResponse, Error, RecutFiguresArgs>({
+    mutationFn: ({ paperId, mode }) =>
+      api.post<RecutFiguresResponse>(
+        `/papers/${paperId}/review/recut-figures`,
+        mode ? { mode } : {},
+      ),
+    onSuccess: (_, { paperId }) => {
+      // figures.json was rewritten + many PNG bytes changed. Drop
+      // every cache for this paper so FiguresTab refetches metadata
+      // and downstream tabs re-evaluate references.
+      qc.invalidateQueries({ queryKey: ["artifact", paperId] });
+      qc.invalidateQueries({ queryKey: ["paper", paperId] });
+    },
+  });
+}

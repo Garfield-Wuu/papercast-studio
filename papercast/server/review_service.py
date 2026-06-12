@@ -103,17 +103,42 @@ def apply_approval(
     if overrides is not None:
         payload["overrides"] = {**existing.get("overrides", {}), **overrides}
 
+    # Manual-override mode (set by POST /review/refresh-from-disk): the
+    # reviewer hand-edited the .pptx and asked us to publish that file
+    # as-is. Skip rebake so we don't clobber their edits with a fresh
+    # template assembly.
+    manual_override = load_manual_override(cfg, paper_id)
+    if manual_override.get("manual_pptx"):
+        # If the .pptx that motivated manual_override is gone (someone
+        # deleted work/<pid>/<pid>.pptx after refresh), refuse to
+        # approve. Otherwise we'd advance to APPROVED, the TTS stage
+        # would proceed, and composer would fail much later with a
+        # confusing "missing pptx" error far from the cause.
+        src_pptx = Path(cfg.paths.work) / paper_id / f"{paper_id}.pptx"
+        if not src_pptx.exists():
+            raise ApprovalError(
+                f"manual_override is set but {src_pptx} is missing — "
+                "re-click 刷新页面（已手改）or remove review/<pid>/manual_override.json",
+            )
+        payload["manual_override"] = manual_override
+        logger.info("approve %s: skipping rebake (manual_pptx=true)", paper_id)
+        # Mirror the user-edited pptx into review/ so the artifact
+        # listing reflects what's about to be published.
+        shutil.copy2(src_pptx, rdir / src_pptx.name)
+    elif report_date:
+        _rebake_cover_date(cfg, paper_id, report_date, rdir)
+
+    # Persist approval.json once we know whether manual_override applied
+    # (so the on-disk record matches the response).
     approval_path.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8",
     )
 
-    if report_date:
-        _rebake_cover_date(cfg, paper_id, report_date, rdir)
-
     rec.advance(Stage.APPROVED)
     db.update_paper(rec)
-    logger.info("approved %s (date=%s reviewer=%s voice=%s)",
-                paper_id, report_date, reviewer, voice)
+    logger.info("approved %s (date=%s reviewer=%s voice=%s manual=%s)",
+                paper_id, report_date, reviewer, voice,
+                manual_override.get("manual_pptx", False))
     return payload
 
 
@@ -222,7 +247,419 @@ def _load_start_meta_vars(cfg: Config, paper_id: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Regenerate (localized LLM rewrite)
+# Manual-override flag — set by POST /review/refresh-from-disk
+# ---------------------------------------------------------------------------
+#
+# When the reviewer edits the .pptx (or script.md) by hand and wants the
+# pipeline to publish *that file* instead of re-assembling the deck from
+# the template + slides_plan.json, the WebUI calls /review/refresh-from-disk.
+# That route writes review/<pid>/manual_override.json which apply_approval
+# reads to skip _rebake_cover_date.
+#
+# Any subsequent regenerate_*() call invalidates the override (because a
+# successful LLM rewrite would otherwise drift away from the user's hand
+# edits to the .pptx). We mirror that by deleting the file and surfacing
+# `manual_override_cleared: True` in the regenerate response so the WebUI
+# can re-prompt the user to hit refresh again.
+
+_MANUAL_OVERRIDE_FILENAME = "manual_override.json"
+
+
+def _manual_override_path(cfg: Config, paper_id: str) -> Path:
+    return Path(cfg.paths.review) / paper_id / _MANUAL_OVERRIDE_FILENAME
+
+
+def load_manual_override(cfg: Config, paper_id: str) -> dict[str, Any]:
+    """Read manual_override.json if present; tolerant of malformed file."""
+    path = _manual_override_path(cfg, paper_id)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def write_manual_override(
+    cfg: Config, paper_id: str, *, reason: str | None = None,
+) -> dict[str, Any]:
+    """Mark the paper as manually edited. Idempotent — overwriting an
+    existing flag refreshes the timestamp."""
+    payload = {
+        "manual_pptx": True,
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
+    }
+    if reason:
+        payload["reason"] = reason
+    path = _manual_override_path(cfg, paper_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8",
+    )
+    return payload
+
+
+def clear_manual_override(cfg: Config, paper_id: str) -> bool:
+    """Remove the manual_override flag. Returns True if a file was deleted."""
+    path = _manual_override_path(cfg, paper_id)
+    if not path.exists():
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def refresh_from_disk(cfg: Config, paper_id: str) -> dict[str, Any]:
+    """Re-render slide previews from the on-disk .pptx and mark the paper
+    as manually edited.
+
+    Steps:
+      1. assert work/<pid>/<pid>.pptx exists (otherwise nothing to render)
+      2. wipe work/<pid>/slides_png/ (force re-render — preview-render is
+         only idempotent when the cached PNGs match the .pptx; we have no
+         way to detect a hand edit so we always invalidate the cache)
+      3. call render_slides_preview(cfg, pid) → fresh page_NN.png set
+      4. write review/<pid>/manual_override.json so apply_approval skips
+         the rebake step
+      5. return the slide list + mtimes the WebUI can use for cache-busting
+
+    The caller (POST /review/refresh-from-disk) is expected to translate
+    FileNotFoundError into 409 (artifact missing → wrong stage) and
+    ValueError into 400.
+    """
+    from papercast.server.figures_service import render_slides_preview
+
+    work = Path(cfg.paths.work) / paper_id
+    pptx = work / f"{paper_id}.pptx"
+    if not pptx.exists():
+        raise FileNotFoundError(f"missing pptx: {pptx}")
+
+    # Force re-render: ask render_slides_preview to wipe the cached PNGs
+    # so it doesn't return stale ones from a previous run of this paper.
+    slides = render_slides_preview(cfg, paper_id, force=True)
+
+    override = write_manual_override(
+        cfg, paper_id, reason="refresh-from-disk",
+    )
+
+    def _mtime(p: Path) -> str | None:
+        if not p.exists():
+            return None
+        return datetime.fromtimestamp(
+            p.stat().st_mtime, tz=UTC,
+        ).isoformat(timespec="seconds")
+
+    return {
+        "paper_id": paper_id,
+        "slides": [
+            {
+                "page_no": s["page_no"],
+                "filename": s["filename"],
+                "url": (
+                    f"/api/files/download?root=work&path="
+                    f"{paper_id}/slides_png/{s['filename']}"
+                ),
+            }
+            for s in slides
+        ],
+        "manual_override": override,
+        "mtimes": {
+            "pptx": _mtime(pptx),
+            "script": _mtime(work / "script.md"),
+            "figures_meta": _mtime(work / "figures" / "figures.json"),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rebuild-from-plan — re-assemble .pptx from edited slides_plan/script
+# ---------------------------------------------------------------------------
+#
+# Use case: the reviewer edited slides_plan.json or script.md (per-page or
+# in bulk) via the WebUI's PageEditDialog. Those PUTs only touch the JSON
+# / Markdown on disk — the assembled .pptx and its rendered PNGs still
+# reflect the prior version. /review/rebuild re-runs assemble_pptx +
+# render_slides_preview so the thumbnails catch up.
+#
+# This is intentionally separate from /review/refresh-from-disk:
+#   - refresh-from-disk: source-of-truth is the .pptx (user hand-edited
+#     in PowerPoint). Sets manual_override=true so approve publishes it
+#     verbatim.
+#   - rebuild: source-of-truth is slides_plan.json + script.md. Clears
+#     manual_override because we just regenerated the deck from JSON,
+#     overwriting any hand-edits in the .pptx.
+#
+# Because rebuild discards hand-edits, the route refuses to run when
+# manual_override is set unless the caller explicitly passes
+# force_override=True (the WebUI surfaces a confirm dialog).
+
+
+class RebuildConflictError(RuntimeError):
+    """Rebuild would overwrite a manual_override; caller must confirm."""
+
+
+def rebuild_from_plan(
+    cfg: Config, paper_id: str, *, force_override: bool = False,
+) -> dict[str, Any]:
+    """Re-assemble work/<pid>/<pid>.pptx from slides_plan.json + script.md
+    and re-render the preview thumbnails.
+
+    Steps:
+      1. assert slides_plan.json + script.md exist
+      2. (unless force_override=True) refuse if manual_override.json is
+         set — rebuild would overwrite the user's hand-edited .pptx
+      3. call assemble_pptx(...) → fresh <pid>.pptx
+      4. force-clear slides_png/ and call render_slides_preview
+      5. clear manual_override.json (the .pptx now reflects the JSON,
+         not the user's hand edits, so approve should re-bake normally)
+      6. return slide list + pptx mtime for cache-busting on the client
+
+    Raises:
+      FileNotFoundError — slides_plan.json or script.md missing
+        (route translates to 409: paper not at the right stage)
+      RebuildConflictError — manual_override is set and force_override
+        is False (route translates to 409 with a distinct payload so the
+        WebUI can show a confirm dialog)
+    """
+    from papercast.author.render import (
+        assemble_pptx, load_slides_plan, parse_script_md,
+    )
+    from papercast.server.figures_service import render_slides_preview
+
+    work = Path(cfg.paths.work) / paper_id
+    plan_path = work / "slides_plan.json"
+    script_path = work / "script.md"
+    if not plan_path.exists():
+        raise FileNotFoundError(f"slides_plan.json missing for {paper_id}")
+    if not script_path.exists():
+        raise FileNotFoundError(f"script.md missing for {paper_id}")
+
+    override = load_manual_override(cfg, paper_id)
+    if override.get("manual_pptx") and not force_override:
+        raise RebuildConflictError(
+            "paper has manual_override set; rebuild would overwrite "
+            "your hand-edited .pptx. Pass force=true to proceed."
+        )
+
+    plan = load_slides_plan(plan_path)
+    page_notes = parse_script_md(script_path)
+    pptx_out = work / f"{paper_id}.pptx"
+    # Re-bake template_vars too — the plan JSON may carry "{{REPORT_DATE}}"
+    # placeholders if the user committed start_meta but hasn't approved yet.
+    # Leaving them literal is fine until approve substitutes them.
+    template_vars = _load_start_meta_vars(cfg, paper_id)
+    assemble_pptx(
+        plan, Path(cfg.paths.template), work / "figures", pptx_out,
+        page_notes=page_notes or None,
+        template_vars=template_vars or None,
+    )
+    logger.info("rebuilt %s.pptx from edited plan + script", paper_id)
+
+    slides = render_slides_preview(cfg, paper_id, force=True)
+
+    cleared = clear_manual_override(cfg, paper_id)
+
+    def _mtime(p: Path) -> str | None:
+        if not p.exists():
+            return None
+        return datetime.fromtimestamp(
+            p.stat().st_mtime, tz=UTC,
+        ).isoformat(timespec="seconds")
+
+    pptx_mtime_unix = int(pptx_out.stat().st_mtime) if pptx_out.exists() else 0
+
+    return {
+        "paper_id": paper_id,
+        "slides": [
+            {
+                "page_no": s["page_no"],
+                "filename": s["filename"],
+                "url": (
+                    f"/api/files/download?root=work&path="
+                    f"{paper_id}/slides_png/{s['filename']}"
+                    f"&v={pptx_mtime_unix}"
+                ),
+            }
+            for s in slides
+        ],
+        "manual_override_cleared": cleared,
+        "mtimes": {
+            "pptx": _mtime(pptx_out),
+            "script": _mtime(script_path),
+            "figures_meta": _mtime(work / "figures" / "figures.json"),
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
+# Recut figures — re-run figures_split with current detector settings
+# ---------------------------------------------------------------------------
+#
+# Use case: the reviewer is unhappy with the auto-extracted figure crops
+# (wrong bbox, missing figure, bad caption match). They want to re-run
+# the extractor in one click. Per-figure rerun already exists
+# (POST /papers/{pid}/figures/{fid}/rerun); this is the whole-set
+# version, useful when the underlying caption detector / extractor mode
+# was tweaked and a single rerun isn't enough.
+#
+# Side effects:
+#   - figures.json is backed up to .history/ before being rewritten
+#   - orphan figure_*.png files (no longer in the new figures.json) are
+#     removed; paper_first_page.png is preserved unconditionally
+#   - slides_plan.json is scanned for image_id / figure_id references
+#     that are no longer present in the new figures.json — these are
+#     surfaced in the response so the WebUI can warn the user that
+#     downstream slides will fall back to paper_first_page until the
+#     plan is fixed (manual edit or LLM regenerate)
+#
+# We deliberately do NOT touch slides_plan.json — figure-id renames are
+# rare enough that auto-rewriting feels worse than warning the user.
+
+
+_VALID_FIGURE_MODES = ("text_blocks", "visual_cluster")
+
+
+def recut_figures(
+    cfg: Config, paper_id: str, *, mode: str | None = None,
+) -> dict[str, Any]:
+    """Re-run figures_split end-to-end and report what changed.
+
+    Args:
+      cfg, paper_id: as elsewhere
+      mode: optional override for cfg.slides.figure_extractor. Must be
+        one of "text_blocks" / "visual_cluster", or None to use the
+        config default.
+
+    Raises:
+      FileNotFoundError — parsed.json missing (paper not far enough
+        through the pipeline). The route translates to 409.
+      ValueError — invalid `mode`. Route translates to 400.
+    """
+    from papercast.reader.pipeline import run_figures
+
+    if mode is not None and mode not in _VALID_FIGURE_MODES:
+        raise ValueError(
+            f"unknown figure_extractor mode {mode!r}; "
+            f"expected one of {_VALID_FIGURE_MODES}"
+        )
+
+    work = Path(cfg.paths.work) / paper_id
+    parsed_path = work / "parsed.json"
+    if not parsed_path.exists():
+        raise FileNotFoundError(f"parsed.json missing for {paper_id}")
+
+    fig_dir = work / "figures"
+    meta_path = fig_dir / "figures.json"
+
+    # 1. Snapshot the old figures.json (if any) before run_figures
+    #    overwrites it, so a regret is recoverable from .history/.
+    #    Note: _HISTORY_DIR_NAME is defined further down in this module
+    #    (next to the regenerate helpers) — Python resolves it at call
+    #    time, not import time, so order doesn't matter here.
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    backup: Path | None = None
+    if meta_path.exists():
+        history = work / _HISTORY_DIR_NAME
+        history.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+        backup = history / f"{ts}-figures.json"
+        shutil.copy2(meta_path, backup)
+
+    # 2. Optional config override — run_figures reads cfg.slides.figure_extractor
+    #    via getattr, so swapping the attr in-place is enough. Restore
+    #    it afterwards to avoid leaking the override into other paths
+    #    on the same Config instance.
+    original_mode = getattr(cfg.slides, "figure_extractor", None)
+    if mode is not None:
+        cfg.slides.figure_extractor = mode  # type: ignore[attr-defined]
+    try:
+        run_figures(cfg, paper_id)
+    finally:
+        if mode is not None and original_mode is not None:
+            cfg.slides.figure_extractor = original_mode  # type: ignore[attr-defined]
+
+    # 3. Read back the new figures.json so we can compute orphans +
+    #    references-to-missing.
+    new_records = json.loads(meta_path.read_text(encoding="utf-8"))
+    new_filenames = {r["filename"] for r in new_records}
+    new_ids = {r["id"] for r in new_records}
+
+    # 4. Sweep orphan PNGs. We only delete fig_*/tab_*.png patterns —
+    #    paper_first_page.png is always preserved, and any non-image
+    #    leftover (.json, .txt, etc.) stays untouched.
+    removed_orphans: list[str] = []
+    for png in fig_dir.glob("*.png"):
+        if png.name == "paper_first_page.png":
+            continue
+        if png.name in new_filenames:
+            continue
+        try:
+            png.unlink()
+            removed_orphans.append(png.name)
+        except OSError:
+            logger.warning("failed to remove orphan figure %s", png)
+
+    # 5. Walk slides_plan.json (if present) for references that no
+    #    longer resolve. Reuse the same field names assemble_pptx looks
+    #    at: any string / list-of-string in fields whose value matches
+    #    a former-but-now-absent figure id.
+    referenced_missing: list[dict[str, Any]] = []
+    plan_path = work / "slides_plan.json"
+    if plan_path.exists():
+        try:
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            plan = None
+        if isinstance(plan, dict):
+            for page in plan.get("pages", []):
+                fields = page.get("fields", {}) if isinstance(page, dict) else {}
+                missing_here: list[str] = []
+                for v in fields.values():
+                    if isinstance(v, str) and v and v not in new_ids and _looks_like_fig_id(v):
+                        missing_here.append(v)
+                    elif isinstance(v, list):
+                        for item in v:
+                            if isinstance(item, str) and item and item not in new_ids and _looks_like_fig_id(item):
+                                missing_here.append(item)
+                if missing_here:
+                    referenced_missing.append({
+                        "page_no": page.get("page_no"),
+                        "ids": sorted(set(missing_here)),
+                    })
+
+    logger.info(
+        "recut figures for %s: %d figures, %d orphans removed, %d pages with stale refs",
+        paper_id, len(new_records), len(removed_orphans), len(referenced_missing),
+    )
+    return {
+        "paper_id": paper_id,
+        "figures_count": len(new_records),
+        "mode": mode or original_mode,
+        "removed_orphans": removed_orphans,
+        "referenced_missing": referenced_missing,
+        "backup": str(backup) if backup else None,
+    }
+
+
+def _looks_like_fig_id(value: str) -> bool:
+    """Heuristic: strings that should be treated as figure-id references
+    when sweeping slides_plan for stale links. Matches `fig_*`, `tab_*`,
+    and the special `paper_first_page` id. Anything else (titles,
+    bullets, free text) is left alone — a 200-character paragraph that
+    happens to contain the word "fig" is not a stale reference.
+    """
+    return (
+        value == "paper_first_page"
+        or value.startswith("fig_")
+        or value.startswith("tab_")
+    )
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -304,11 +741,17 @@ def regenerate_reading(
         json.dumps(updated, indent=2, ensure_ascii=False), encoding="utf-8",
     )
 
+    # Clear manual_override only after the LLM succeeded and the file
+    # was rewritten — failing earlier would leave the user with neither
+    # an updated artifact nor the override flag.
+    manual_cleared = clear_manual_override(cfg, paper_id)
+
     return {
         "target": "reading",
         "sections_updated": sorted(revisions.keys()),
         "backup": str(backup) if backup else None,
         "stale": ["slides_plan", "script"],
+        "manual_override_cleared": manual_cleared,
     }
 
 
@@ -368,11 +811,15 @@ def regenerate_script_pages(
 
     _write_script_md(script_path, plan, new_notes)
 
+    # Override flag invalidates only after the rewrite committed.
+    manual_cleared = clear_manual_override(cfg, paper_id)
+
     return {
         "target": "script",
         "pages_updated": rewrote,
         "backup": str(backup) if backup else None,
         "stale": ["pptx_notes"],
+        "manual_override_cleared": manual_cleared,
     }
 
 
@@ -446,11 +893,15 @@ def regenerate_slides_pages(
         json.dumps(plan_payload, indent=2, ensure_ascii=False), encoding="utf-8",
     )
 
+    # Override flag invalidates only after the rewrite committed.
+    manual_cleared = clear_manual_override(cfg, paper_id)
+
     return {
         "target": "slides_plan",
         "pages_updated": rewrote,
         "backup": str(backup) if backup else None,
         "stale": ["script", "pptx"],
+        "manual_override_cleared": manual_cleared,
     }
 
 

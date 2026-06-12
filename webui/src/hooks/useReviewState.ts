@@ -28,6 +28,14 @@ export interface ReviewState {
   slides: Record<number, ReviewItem>;
   facts: Record<number, ReviewItem>;
   globalFeedback: string;
+  /**
+   * Slide pages whose JSON / script has been edited via PageEditDialog
+   * since the last rebuild. SlidesScriptTab maintains the membership by
+   * deep-comparing the current artifact against an initial snapshot;
+   * ReviewPanel reads `dirtyPages.size` to enable the "全部重新生成"
+   * action. Cleared on successful rebuild.
+   */
+  dirtyPages: Set<number>;
 }
 
 type Action =
@@ -35,6 +43,9 @@ type Action =
   | { type: "feedback"; tab: Tab; key: ItemKey; value: string }
   | { type: "globalFeedback"; value: string }
   | { type: "clearTab"; tab: Tab }
+  | { type: "markDirty"; pageNo: number }
+  | { type: "clearDirty"; pageNo: number }
+  | { type: "clearAllDirty" }
   | { type: "reset" };
 
 const empty: ReviewState = {
@@ -42,6 +53,7 @@ const empty: ReviewState = {
   slides: {},
   facts: {},
   globalFeedback: "",
+  dirtyPages: new Set<number>(),
 };
 
 function reducer(state: ReviewState, action: Action): ReviewState {
@@ -68,6 +80,21 @@ function reducer(state: ReviewState, action: Action): ReviewState {
       return { ...state, globalFeedback: action.value };
     case "clearTab":
       return { ...state, [action.tab]: {} };
+    case "markDirty": {
+      if (state.dirtyPages.has(action.pageNo)) return state;
+      const next = new Set(state.dirtyPages);
+      next.add(action.pageNo);
+      return { ...state, dirtyPages: next };
+    }
+    case "clearDirty": {
+      if (!state.dirtyPages.has(action.pageNo)) return state;
+      const next = new Set(state.dirtyPages);
+      next.delete(action.pageNo);
+      return { ...state, dirtyPages: next };
+    }
+    case "clearAllDirty":
+      if (state.dirtyPages.size === 0) return state;
+      return { ...state, dirtyPages: new Set<number>() };
     case "reset":
       return empty;
   }
@@ -104,6 +131,9 @@ export function useReviewState() {
     setGlobalFeedback: (value: string) =>
       dispatch({ type: "globalFeedback", value }),
     clearTab: (tab: Tab) => dispatch({ type: "clearTab", tab }),
+    markDirty: (pageNo: number) => dispatch({ type: "markDirty", pageNo }),
+    clearDirty: (pageNo: number) => dispatch({ type: "clearDirty", pageNo }),
+    clearAllDirty: () => dispatch({ type: "clearAllDirty" }),
     reset: () => dispatch({ type: "reset" }),
     itemFor,
     checkedCount,
@@ -112,5 +142,7 @@ export function useReviewState() {
       checkedCount("figures") +
       checkedCount("slides") +
       checkedCount("facts"),
+    dirtyCount: state.dirtyPages.size,
+    isDirty: (pageNo: number) => state.dirtyPages.has(pageNo),
   };
 }

@@ -28,6 +28,7 @@ five-section reading.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -37,24 +38,31 @@ import fitz
 
 from .pdf import ParsedDocument, ParsedPage
 
-# Figure captions: "Fig. 1.", "Figure 12:", "FIG. 3." — period or colon
-# AFTER the number is required, otherwise body-text mentions like
-# "Fig. 5 shows the learning curves..." would falsely match.
+logger = logging.getLogger(__name__)
+
+# Figure captions: "Fig. 1.", "Figure 12:", "FIG. 3.", "Fig. 1 | foo".
+# A caption must start with the label and immediately commit to being
+# a caption via a strong separator after the number — period, colon,
+# pipe (Nature / NMI / Cell journals), em dash, or en dash. Without
+# this commitment, body-text mentions like "Fig. 5 shows the learning
+# curves..." would falsely match.
 _FIG_CAPTION_RE = re.compile(
-    r"^\s*(Fig\.?|Figure|FIG\.?)\s*(\d+)\s*[.:]",
+    r"^\s*(Fig\.?|Figure|FIG\.?)\s*(\d+)\s*[.:|—–]",
     re.IGNORECASE,
 )
 
-# Table captions. We accept three IEEE/Elsevier patterns:
+# Table captions. We accept several IEEE/Elsevier/Nature patterns:
 #     "TABLE I"          → label only (caption text follows on next line)
 #     "Table 5: foo"     → label + colon + description
 #     "Table 5. foo"     → label + period + description
+#     "Table 5 | foo"    → label + pipe + description (Nature style)
+#     "Table 5 — foo"    → label + em dash + description
 # The trailing class is intentionally restrictive — body-text mentions
 # like "Table 7 presents the ablation study..." (verb-led) MUST NOT
 # match, otherwise we crop a slab of body text and pass it off as a
 # table.
 _TAB_CAPTION_RE = re.compile(
-    r"^\s*(Table|TABLE)\s+([IVXLCDM]+|\d+)\s*(?:[:.\n\r]|$)",
+    r"^\s*(Table|TABLE)\s+([IVXLCDM]+|\d+)\s*(?:[:.|—–\n\r]|$)",
     re.IGNORECASE,
 )
 
@@ -86,6 +94,17 @@ _REGION_PAD_PT = 4.0
 # 1000+ chars, so we keep that threshold lenient.
 _MAX_FIG_CAPTION_CHARS = 1500
 _MAX_TAB_CAPTION_CHARS = 400
+
+# Nature / NMI / Cell-style captions ("Fig. 1 | foo") often run very
+# long because the journals stuff a multi-paragraph description into
+# the caption itself. The pipe / em-dash / en-dash separator is a
+# strong signal that it really is a caption (body text never uses
+# these as label-number separators), so we relax the length cap when
+# we see one. We still cap somewhere — a runaway 10k-char block is
+# almost certainly an OCR mishap.
+_MAX_FIG_CAPTION_CHARS_PIPE_STYLE = 4000
+_MAX_TAB_CAPTION_CHARS_PIPE_STYLE = 2000
+_PIPE_STYLE_SEPARATORS = ("|", "—", "–")
 
 # A real table caption's first line is short (label optionally followed by
 # a brief description). Body-text paragraphs that lead with "Table N" tend
@@ -155,9 +174,21 @@ def extract_figures(
                 if region is None:
                     continue
                 fid = _build_id(cap, used_ids)
-                used_ids.add(fid)
                 fname = f"{fid}.png"
-                _render_crop(page, region, zoom, out_dir / fname)
+                try:
+                    _render_crop(page, region, zoom, out_dir / fname)
+                except (ValueError, RuntimeError) as exc:
+                    # Skip degenerate crops (sub-pixel rect, MuPDF
+                    # bandwriter rejection) instead of failing the stage.
+                    # The caption is still useful in figures.json so the
+                    # reader LLM has the text; downstream slides will fall
+                    # back to the paper-first-page image.
+                    logger.warning(
+                        "skipping figure %s on page %d: %s",
+                        fid, page.number + 1, exc,
+                    )
+                    continue
+                used_ids.add(fid)
                 records.append(FigureRecord(
                     id=fid,
                     type=cap.kind,
@@ -267,11 +298,28 @@ def _find_captions(page: ParsedPage) -> list[_Caption]:
         if not m_fig and not m_tab:
             continue
 
+        # Pipe / em-dash / en-dash captions get a more generous length
+        # cap because Nature / NMI / Cell stuff multi-paragraph
+        # descriptions into a single caption block. Body text never
+        # uses these as the post-number separator, so allowing the
+        # higher cap doesn't pull body paragraphs into the result.
+        is_pipe_style = any(
+            sep in first_line[:30] for sep in _PIPE_STYLE_SEPARATORS
+        )
+        fig_cap = (
+            _MAX_FIG_CAPTION_CHARS_PIPE_STYLE
+            if is_pipe_style else _MAX_FIG_CAPTION_CHARS
+        )
+        tab_cap = (
+            _MAX_TAB_CAPTION_CHARS_PIPE_STYLE
+            if is_pipe_style else _MAX_TAB_CAPTION_CHARS
+        )
+
         # Reject body-text paragraphs that happen to start with "Fig N" or
         # "Table N". Real captions are short relative to body text.
-        if m_fig and len(blk.text) > _MAX_FIG_CAPTION_CHARS:
+        if m_fig and len(blk.text) > fig_cap:
             continue
-        if m_tab and len(blk.text) > _MAX_TAB_CAPTION_CHARS:
+        if m_tab and len(blk.text) > tab_cap:
             continue
 
         # Body-text guard for tables: a real "Table N" caption either ends
@@ -521,9 +569,36 @@ def _roman_to_int(s: str) -> int:
     return total
 
 
+# MuPDF's bandwriter rejects sub-pixel pixmaps with "code=4: Invalid
+# bandwriter header dimensions/setup". A zoom of 200/72 ≈ 2.78 means a
+# rect under ~0.4pt on either side renders to 0px and trips the check.
+# Keep the floor in *PDF points* so it survives any DPI choice.
+_MIN_RENDER_DIM_PT = 4.0
+
+
 def _render_crop(page: fitz.Page, rect: fitz.Rect, zoom: float, out_path: Path) -> None:
+    """Render `rect` of `page` at `zoom` and write a PNG.
+
+    Raises ValueError when the rect is degenerate (negative or sub-pixel
+    after zoom). MuPDF would otherwise fail deep in the bandwriter with
+    a cryptic "code=4: Invalid bandwriter header" — surfacing the bad
+    dimensions here lets callers skip the figure with an actionable
+    message instead of crashing the whole stage.
+    """
+    width_pt = rect.x1 - rect.x0
+    height_pt = rect.y1 - rect.y0
+    if width_pt < _MIN_RENDER_DIM_PT or height_pt < _MIN_RENDER_DIM_PT:
+        raise ValueError(
+            f"degenerate crop rect {width_pt:.2f}x{height_pt:.2f}pt "
+            f"(min {_MIN_RENDER_DIM_PT}pt); cannot render to PNG",
+        )
     matrix = fitz.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=matrix, clip=rect, alpha=False)
+    if pix.width <= 0 or pix.height <= 0:
+        raise ValueError(
+            f"empty pixmap {pix.width}x{pix.height}px from rect "
+            f"{width_pt:.2f}x{height_pt:.2f}pt at zoom {zoom:.2f}",
+        )
     pix.save(str(out_path))
 
 
@@ -541,11 +616,42 @@ _VISUAL_SCORE_FLOOR = 0.55
 # we trim the caller's bbox to stay inside the page minus 5pt margin.
 _VISUAL_PAD_PT = 6.0
 
+# Union-in-column thresholds. After picking a single best-scoring
+# candidate, we sweep ALL same-direction candidates whose bbox falls
+# within the caption's horizontal span (± slack) and whose distance to
+# the caption is within `_UNION_DIST_FRAC` of page height; everything
+# that passes contributes to the final crop bbox via union. This is
+# what makes multi-panel figures (Fig 2 with 6 sub-photos, Fig 5 with
+# 9 sub-images) crop in their entirety instead of just the panel
+# closest to the caption.
+_UNION_X_SLACK_PT = 12.0
+_UNION_DIST_FRAC = 0.55
+
+# Once the visual union is set, we sweep TEXT lines (sub-panel labels
+# like "a/b/c", "Door opening", "Pouring") that sit immediately around
+# the union and grow it to include them. Without this the crop slices
+# off the very label strip that names each sub-figure. The "snap"
+# distance is small — labels printed beyond ~14pt from the artwork
+# stop being part of the figure and are body text.
+_LABEL_SNAP_PT = 14.0
+
 
 def _match_via_visual_cluster(page: fitz.Page, cap: _Caption) -> fitz.Rect | None:
-    """Score each embedded image + drawing cluster on the page against the
-    caption's expected direction. Return the best-scoring candidate's
-    refined bbox (with padding + page clamp), or None if nothing wins.
+    """Anchor `cap` to the page's visual content. Returns the crop bbox.
+
+    Strategy:
+      1. Score every embedded image + drawing cluster against the
+         caption's expected direction. Pick the best-scoring one as
+         the anchor.
+      2. If no anchor clears `_VISUAL_SCORE_FLOOR`, return None and let
+         the caller fall back to the text-blocks heuristic.
+      3. Take the union of every same-direction candidate that:
+           - falls within the caption's horizontal span (± slack), AND
+           - sits within `_UNION_DIST_FRAC * page_height` of the caption
+         This catches multi-panel figures (Nature `a-f` action shots,
+         drawing-process grids) that would otherwise crop to a single
+         sub-panel.
+      4. Pad and clamp the union to the page.
 
     Direction:
       - figure caption → search up (figure sits above caption)
@@ -560,28 +666,128 @@ def _match_via_visual_cluster(page: fitz.Page, cap: _Caption) -> fitz.Rect | Non
 
     direction = "up" if cap.kind == "figure" else "down"
     page_height = page.rect.height
+    cap_x0, cap_y0, cap_x1, cap_y1 = cap.bbox
 
     images = find_image_rects(page, DEFAULT_PARAMS)
     clusters = cluster_drawings(page, DEFAULT_PARAMS)
 
-    best_score = 0.0
-    best_rect: fitz.Rect | None = None
-
+    # Step 1: gather every same-direction candidate together with its
+    # score and refined rect. We need the full list later for the union
+    # pass, so we keep them all rather than just remembering the winner.
+    scored: list[tuple[float, fitz.Rect]] = []
     for rect in images:
         score, refined = score_match(cap.bbox, rect, direction, page_height)
-        if score > best_score and refined is not None:
-            best_score = score
-            best_rect = refined
+        if score > 0 and refined is not None:
+            scored.append((score, refined))
     for cluster in clusters:
         score, refined = score_match(cap.bbox, cluster, direction, page_height)
-        if score > best_score and refined is not None:
-            best_score = score
-            best_rect = refined
+        if score > 0 and refined is not None:
+            scored.append((score, refined))
 
-    if best_rect is None or best_score < _VISUAL_SCORE_FLOOR:
+    if not scored:
+        return None
+    best_score, best_rect = max(scored, key=lambda sr: sr[0])
+    if best_score < _VISUAL_SCORE_FLOOR:
+        # Visual matching couldn't commit; let the caller fall through
+        # to text_blocks. Same threshold as before — we only escalate
+        # to union when the anchor is confident.
         return None
 
-    return _pad_and_clamp(best_rect, page.rect)
+    # Step 2: union pass. Caption block bbox is our column reference;
+    # candidates whose bbox sits inside [cap.x0 - slack, cap.x1 + slack]
+    # are considered same-column. The slack covers cases where a small
+    # decoration (axis label, "+" symbol) sits a hair outside the
+    # caption's typeset width.
+    col_x0 = cap_x0 - _UNION_X_SLACK_PT
+    col_x1 = cap_x1 + _UNION_X_SLACK_PT
+    max_dist = _UNION_DIST_FRAC * page_height
+    cap_anchor_y = cap_y0 if direction == "up" else cap_y1
+
+    union = fitz.Rect(best_rect)
+    for _, rect in scored:
+        # Same-column horizontally?
+        if rect.x0 < col_x0 or rect.x1 > col_x1:
+            continue
+        # Within distance window in the matching direction?
+        if direction == "up":
+            if rect.y1 > cap_anchor_y:
+                continue  # candidate dips below the caption — skip
+            dist = max(0.0, cap_anchor_y - rect.y1)
+        else:
+            if rect.y0 < cap_anchor_y:
+                continue
+            dist = max(0.0, rect.y0 - cap_anchor_y)
+        if dist > max_dist:
+            continue
+        # Stop the union from running away into the previous figure /
+        # next table by only accepting candidates whose direct distance
+        # to the *current* union is also reasonable.
+        if direction == "up" and union.y0 - rect.y1 > max_dist:
+            continue
+        if direction == "down" and rect.y0 - union.y1 > max_dist:
+            continue
+        union |= rect
+
+    # Step 3: snap nearby sub-panel labels into the union. Captions
+    # like "a/b/c" (single-letter panel keys) and "Door opening" /
+    # "Pouring" (descriptive panel names) sit a few points outside the
+    # raw image bboxes; without this pass the crop slices them off.
+    union = _grow_union_with_labels(
+        page, union, col_x0=col_x0, col_x1=col_x1, cap_bbox=cap.bbox,
+    )
+
+    return _pad_and_clamp(union, page.rect)
+
+
+def _grow_union_with_labels(
+    page: fitz.Page,
+    union: fitz.Rect,
+    *,
+    col_x0: float,
+    col_x1: float,
+    cap_bbox: tuple[float, float, float, float],
+) -> fitz.Rect:
+    """Pull short text lines that hug the union into the crop.
+
+    Skipped: lines that overlap the caption itself, body text columns
+    outside [col_x0, col_x1], and any line longer than ~30 chars (those
+    are body paragraphs, not labels).
+    """
+    cap_x0, cap_y0, cap_x1, cap_y1 = cap_bbox
+    grown = fitz.Rect(union)
+    try:
+        blocks = page.get_text("dict").get("blocks", [])
+    except Exception:  # noqa: BLE001 — never break extraction on text layer issues
+        return grown
+    for blk in blocks:
+        if blk.get("type") != 0:
+            continue
+        for line in blk.get("lines", []):
+            bb = line.get("bbox")
+            if not bb:
+                continue
+            lx0, ly0, lx1, ly1 = bb
+            # Skip caption — would otherwise pull the whole caption
+            # block into every figure crop.
+            if ly0 >= cap_y0 - 1 and ly1 <= cap_y1 + 1:
+                continue
+            # Same-column horizontally — labels typeset off-column are
+            # body text in another section.
+            if lx0 < col_x0 or lx1 > col_x1:
+                continue
+            text = "".join(
+                s.get("text", "") for s in line.get("spans", [])
+            ).strip()
+            if not text or len(text) > 30:
+                continue
+            # Snap if the line touches or hugs the union vertically.
+            above = grown.y0 - ly1
+            below = ly0 - grown.y1
+            inside = ly0 >= grown.y0 - 1 and ly1 <= grown.y1 + 1
+            if not (inside or 0 <= above <= _LABEL_SNAP_PT or 0 <= below <= _LABEL_SNAP_PT):
+                continue
+            grown |= fitz.Rect(lx0, ly0, lx1, ly1)
+    return grown
 
 
 def _pad_and_clamp(rect: fitz.Rect, page_rect: fitz.Rect) -> fitz.Rect:

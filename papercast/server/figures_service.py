@@ -154,11 +154,18 @@ def replace_figure(cfg: Config, paper_id: str, figure_id: str, content: bytes) -
     return target
 
 
-def render_slides_preview(cfg: Config, paper_id: str, *, dpi: int = 100) -> list[dict[str, Any]]:
-    """Render the assembled .pptx into one PNG per slide. Idempotent:
-    if slides_png/ already has the right number of files, returns them
-    without re-rendering. The lower default DPI (100 vs composer's 150)
-    keeps the preview snappy — the WebUI only needs ~600px-wide images.
+def render_slides_preview(
+    cfg: Config, paper_id: str, *, dpi: int = 100, force: bool = False,
+) -> list[dict[str, Any]]:
+    """Render the assembled .pptx into one PNG per slide. Idempotent
+    by default: if slides_png/ already has the right number of files,
+    returns them without re-rendering. Pass ``force=True`` to wipe the
+    cache and always re-run LibreOffice — callers that just rewrote
+    ``<pid>.pptx`` (refresh-from-disk, rebuild-from-plan) need this so
+    the next call doesn't return stale PNGs.
+
+    The lower default DPI (100 vs composer's 150) keeps the preview
+    snappy — the WebUI only needs ~600px-wide images.
 
     Returns a list of {page_no, filename} so the caller can build URLs.
     """
@@ -170,9 +177,16 @@ def render_slides_preview(cfg: Config, paper_id: str, *, dpi: int = 100) -> list
         raise FileNotFoundError(f"missing pptx: {pptx}")
 
     out_dir = work / "slides_png"
+    if force and out_dir.exists():
+        # Drop the entire cache, including any non-page_*.png leftovers,
+        # so LibreOffice writes into a clean dir.
+        import shutil as _shutil
+        _shutil.rmtree(out_dir, ignore_errors=True)
+
     existing = sorted(out_dir.glob("page_*.png")) if out_dir.exists() else []
     # Quick freshness check: if mp4-stage rendering already populated
-    # this dir for the same .pptx, reuse it.
+    # this dir for the same .pptx, reuse it. Skipped under force=True
+    # because the dir was just wiped above.
     if existing:
         return [
             {"page_no": int(p.stem.split("_")[1]), "filename": p.name}

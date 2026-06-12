@@ -6,6 +6,8 @@ import {
   Sparkles,
   Eye,
   ListChecks,
+  HardDriveDownload,
+  Wand2,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
 import { Button } from "@/components/ui/Button";
@@ -25,6 +27,8 @@ import {
   type RegenerateItem,
   type RegenerateTarget,
 } from "@/hooks/useRegenerate";
+import { useRefreshFromDisk } from "@/hooks/useRefreshFromDisk";
+import { useRebuildSlides } from "@/hooks/useFigures";
 
 interface Props {
   paperId: string;
@@ -59,6 +63,8 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
   const regenerate = useRegenerate();
   const preview = useRegeneratePreview();
   const approve = useApprove();
+  const refreshFromDisk = useRefreshFromDisk();
+  const rebuildSlides = useRebuildSlides();
 
   const [activeTab, setActiveTab] = useState<Tab>("slides");
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -66,6 +72,12 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [approveOpen, setApproveOpen] = useState(false);
   const [regenLog, setRegenLog] = useState<string | null>(null);
+  // Bumped on every successful refresh-from-disk; passed to child tabs
+  // so their <img> srcs cache-bust and the slide preview refetches.
+  const [refreshToken, setRefreshToken] = useState(0);
+  // True after refresh-from-disk; flipped back to false when a regenerate
+  // call succeeds (the server side clears manual_override.json then too).
+  const [manualOverride, setManualOverride] = useState(false);
 
   // Build regenerate batches grouped by target.
   // Slides ticks fan out into slides_plan AND script (same feedback per page).
@@ -123,6 +135,7 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
     setRegenLog(null);
     try {
       const detail: string[] = [];
+      let clearedOverride = false;
       for (const b of batches) {
         const res = await regenerate.mutateAsync({
           paperId,
@@ -134,12 +147,67 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
           detail.push(`reading: ${res.detail.sections_updated.join(", ")}`);
         if (res.detail.pages_updated)
           detail.push(`${b.target}: pages ${res.detail.pages_updated.join(", ")}`);
+        if ((res.detail as { manual_override_cleared?: boolean }).manual_override_cleared)
+          clearedOverride = true;
       }
-      setRegenLog(`已重生：${detail.join(" · ")}`);
+      const suffix = clearedOverride
+        ? "（注意：本次重生覆盖了之前的手改，如需保留手改请重新点「刷新页面」）"
+        : "";
+      setRegenLog(`已重生：${detail.join(" · ")}${suffix}`);
+      if (clearedOverride) setManualOverride(false);
       review.clearTab("slides");
       review.clearTab("facts");
     } catch (e) {
       setRegenLog(`重生失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const runRefresh = async () => {
+    setRegenLog(null);
+    try {
+      await refreshFromDisk.mutateAsync(paperId);
+      setManualOverride(true);
+      setRefreshToken((n) => n + 1);
+      setRegenLog("已按磁盘版本刷新切图、PPT 缩略图与讲稿；审批通过后将直接发布手改 PPT，不再重拼。");
+    } catch (e) {
+      const detail = e instanceof Error ? e.message : String(e);
+      setRegenLog(`刷新失败：${detail}`);
+    }
+  };
+
+  /**
+   * Rebuild the entire .pptx from the current slides_plan.json + script.md
+   * and re-render every thumbnail. Use case: the reviewer edited
+   * multiple pages in PageEditDialog and wants one click to apply all
+   * of them. SlidesScriptTab owns the per-row equivalent for single
+   * pages — both call the same /review/rebuild endpoint server-side.
+   */
+  const runRebuildAll = async () => {
+    setRegenLog(null);
+    const dirtyCount = review.dirtyCount;
+    try {
+      let res = await rebuildSlides
+        .mutateAsync({ paperId, force: false })
+        .catch(async (err: Error) => {
+          if (/manual_override:/.test(err.message)) {
+            const ok = window.confirm(
+              "此 PPT 之前被标记为「手改版」。重新生成会用当前 JSON / 讲稿覆盖手改内容，确认继续？",
+            );
+            if (!ok) throw new Error("已取消");
+            return rebuildSlides.mutateAsync({ paperId, force: true });
+          }
+          throw err;
+        });
+      setManualOverride(false);
+      setRefreshToken((n) => n + 1);
+      review.clearAllDirty();
+      const cleared = res.manual_override_cleared
+        ? "（已清除手改标记）"
+        : "";
+      setRegenLog(`已按 JSON / 讲稿重做 ${dirtyCount} 页 PPT 与缩略图${cleared}。`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg !== "已取消") setRegenLog(`重做失败：${msg}`);
     }
   };
 
@@ -202,6 +270,23 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
         <Button
           variant="ghost"
           size="sm"
+          onClick={runRefresh}
+          disabled={refreshFromDisk.isPending}
+          title="读取磁盘上当前的 PPT 与讲稿，重新渲染缩略图。审批通过时将直接发布手改 PPT，不再按模板重拼。"
+        >
+          <HardDriveDownload
+            size={14}
+            className={refreshFromDisk.isPending ? "animate-spin" : ""}
+          />
+          {refreshFromDisk.isPending
+            ? "刷新中…"
+            : manualOverride
+              ? "再刷新一次"
+              : "刷新页面（已手改）"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
           onClick={runPreview}
           disabled={!canRegenerate}
         >
@@ -224,6 +309,25 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
             className={regenerate.isPending ? "animate-spin" : ""}
           />
           {regenerate.isPending ? "重生中…" : `局部重生（${llmChecked}）`}
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={runRebuildAll}
+          disabled={review.dirtyCount === 0 || rebuildSlides.isPending}
+          title={
+            review.dirtyCount === 0
+              ? "没有未应用的修改"
+              : `用当前 JSON / 讲稿重做整份 PPT 并刷新所有缩略图（约 30 秒）`
+          }
+        >
+          <Wand2
+            size={14}
+            className={rebuildSlides.isPending ? "animate-spin" : ""}
+          />
+          {rebuildSlides.isPending
+            ? "重做中…"
+            : `重新生成 PPT（${review.dirtyCount}）`}
         </Button>
         <Button
           variant="primary"
@@ -253,10 +357,21 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
 
           <div className="mt-4">
             <TabsContent value="figures">
-              <FiguresTab paperId={paperId} review={review} />
+              <FiguresTab
+                paperId={paperId}
+                review={review}
+                refreshToken={refreshToken}
+                onFiguresChanged={() => {
+                  // figures.json was rewritten — surface the change to
+                  // SlidesScriptTab too, since slide thumbnails embed
+                  // figure crops and may need to refetch.
+                  setRefreshToken((n) => n + 1);
+                  setRegenLog("已重新切图。请到「PPT · 讲稿」页确认引用是否仍正确。");
+                }}
+              />
             </TabsContent>
             <TabsContent value="slides">
-              <SlidesScriptTab paperId={paperId} review={review} />
+              <SlidesScriptTab paperId={paperId} review={review} refreshToken={refreshToken} />
             </TabsContent>
             <TabsContent value="facts">
               <FactsTab paperId={paperId} review={review} />
@@ -266,7 +381,7 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
 
         <section className="rounded-lg border border-border bg-surface-2/40 p-3">
           <h4 className="text-xs font-medium text-fg-muted mb-2">
-            全局反馈（应用到本批次的所有重生请求）
+            全局反馈（仅作用于「PPT · 讲稿」「事实卡」的 LLM 重生；图像不读此项）
           </h4>
           <Textarea
             value={review.state.globalFeedback}
@@ -283,6 +398,7 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
         paperId={paperId}
         defaultVoice={defaultVoice}
         saving={approve.isPending}
+        manualOverride={manualOverride}
         staleHint={
           totalChecked > 0
             ? `还有 ${totalChecked} 项被标记需修订，确认要在不修改的情况下通过吗？`
