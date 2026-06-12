@@ -19,6 +19,15 @@ venv/
 .vscode/
 *.swp
 
+# --- Claude Code 本地配置（个人权限白名单 / 本机路径，不入仓） ---
+.claude/
+
+# --- 内部规划/交接文档（含本机路径 + sprint 内部细节，不入仓） ---
+docs/PLAN_P*.md
+docs/PLAN_WEBUI.md
+docs/HANDOFF_*.md
+docs/SMOKE_FIX_*.md
+
 # --- OS ---
 .DS_Store
 Thumbs.db
