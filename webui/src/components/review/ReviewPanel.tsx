@@ -78,6 +78,14 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
   // True after refresh-from-disk; flipped back to false when a regenerate
   // call succeeds (the server side clears manual_override.json then too).
   const [manualOverride, setManualOverride] = useState(false);
+  // True after a successful "重新切图". Cleared on the next rebuild,
+  // refresh-from-disk, or regenerate. Drives the rebuild button's
+  // enabled state so the user can re-bake the .pptx with fresh figure
+  // crops without first ticking and editing a slide page. The
+  // distinction from review.dirtyCount is that figures.json sits
+  // outside slides_plan / script, so per-page dirty tracking can't
+  // see it.
+  const [figuresStale, setFiguresStale] = useState(false);
 
   // Build regenerate batches grouped by target.
   // Slides ticks fan out into slides_plan AND script (same feedback per page).
@@ -168,6 +176,7 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
       await refreshFromDisk.mutateAsync(paperId);
       setManualOverride(true);
       setRefreshToken((n) => n + 1);
+      setFiguresStale(false);
       setRegenLog("已按磁盘版本刷新切图、PPT 缩略图与讲稿；审批通过后将直接发布手改 PPT，不再重拼。");
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
@@ -201,10 +210,14 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
       setManualOverride(false);
       setRefreshToken((n) => n + 1);
       review.clearAllDirty();
+      setFiguresStale(false);
       const cleared = res.manual_override_cleared
         ? "（已清除手改标记）"
         : "";
-      setRegenLog(`已按 JSON / 讲稿重做 ${dirtyCount} 页 PPT 与缩略图${cleared}。`);
+      const reason = dirtyCount > 0
+        ? `${dirtyCount} 页 PPT 与讲稿`
+        : "切图变化";
+      setRegenLog(`已按 JSON / 讲稿重做${reason}并刷新缩略图${cleared}。`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg !== "已取消") setRegenLog(`重做失败：${msg}`);
@@ -314,11 +327,15 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
           variant="secondary"
           size="sm"
           onClick={runRebuildAll}
-          disabled={review.dirtyCount === 0 || rebuildSlides.isPending}
+          disabled={
+            (review.dirtyCount === 0 && !figuresStale) || rebuildSlides.isPending
+          }
           title={
-            review.dirtyCount === 0
+            review.dirtyCount === 0 && !figuresStale
               ? "没有未应用的修改"
-              : `用当前 JSON / 讲稿重做整份 PPT 并刷新所有缩略图（约 30 秒）`
+              : figuresStale && review.dirtyCount === 0
+                ? "切图已更新但 PPT 仍嵌入旧图，点此把新切图同步到 PPT 并刷新缩略图（约 30 秒）"
+                : `用当前 JSON / 讲稿重做整份 PPT 并刷新所有缩略图（约 30 秒）`
           }
         >
           <Wand2
@@ -327,7 +344,11 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
           />
           {rebuildSlides.isPending
             ? "重做中…"
-            : `重新生成 PPT（${review.dirtyCount}）`}
+            : review.dirtyCount > 0
+              ? `重新生成 PPT（${review.dirtyCount}）`
+              : figuresStale
+                ? "同步新切图到 PPT"
+                : "重新生成 PPT"}
         </Button>
         <Button
           variant="primary"
@@ -364,9 +385,15 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
                 onFiguresChanged={() => {
                   // figures.json was rewritten — surface the change to
                   // SlidesScriptTab too, since slide thumbnails embed
-                  // figure crops and may need to refetch.
+                  // figure crops and may need to refetch. Mark figures
+                  // as stale so the rebuild button enables: the .pptx
+                  // still embeds the OLD crops until rebuild_from_plan
+                  // re-runs assemble_pptx with the fresh figures dir.
                   setRefreshToken((n) => n + 1);
-                  setRegenLog("已重新切图。请到「PPT · 讲稿」页确认引用是否仍正确。");
+                  setFiguresStale(true);
+                  setRegenLog(
+                    "已重新切图。点顶部「同步新切图到 PPT」让 PPT 用新图重做。",
+                  );
                 }}
               />
             </TabsContent>
