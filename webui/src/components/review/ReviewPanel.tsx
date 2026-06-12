@@ -370,7 +370,22 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
                 }}
               />
             </TabsContent>
-            <TabsContent value="slides">
+            {/*
+             * forceMount keeps SlidesScriptTab alive even when the user
+             * is on another tab. Without it Radix Tabs unmounts the
+             * inactive panel, which destroys the dirty-detection
+             * baseline (initialFieldsRef / initialScriptRef inside
+             * SlidesScriptTab). When the user came back, the baseline
+             * was rebuilt from the *current* artifact contents — so
+             * any prior PageEditDialog edit looked clean and the
+             * "重新生成 PPT (N)" button stayed disabled forever. We
+             * hide via CSS instead so the React state survives.
+             */}
+            <TabsContent
+              value="slides"
+              forceMount
+              className="data-[state=inactive]:hidden"
+            >
               <SlidesScriptTab paperId={paperId} review={review} refreshToken={refreshToken} />
             </TabsContent>
             <TabsContent value="facts">
