@@ -90,6 +90,8 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
   // Build regenerate batches grouped by target.
   // Slides ticks fan out into slides_plan AND script (same feedback per page).
   // Facts ticks become a reading regenerate batch with section=fact_cards.
+  // Global feedback alone (no ticks) becomes a whole-reading rewrite —
+  // the reader regenerator natively supports items=[] + feedback.
   const batches = useMemo<Batch[]>(() => {
     const out: Batch[] = [];
 
@@ -128,6 +130,23 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
       });
     }
 
+    // Global-feedback-only path: no ticks, but the user wrote
+    // something into the textarea. Treat it as a whole-reading
+    // rewrite — the reader regenerator natively supports items=[] +
+    // feedback (regenerate_reading falls back to all five sections).
+    // This is the "I have an overall direction, just apply it"
+    // ergonomic, so the button isn't gated on having ticked anything.
+    if (
+      out.length === 0 &&
+      review.state.globalFeedback.trim().length > 0
+    ) {
+      out.push({
+        target: "reading",
+        items: [],
+        feedback: review.state.globalFeedback,
+      });
+    }
+
     return out;
   }, [review.state]);
 
@@ -138,6 +157,29 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
   const llmChecked = slidesChecked + factsChecked;
   const canRegenerate = batches.length > 0;
   const canApprove = totalChecked === 0;
+
+  // Per-action tooltip / label rendering. Disabled buttons show WHY
+  // they're disabled, not just an empty title — that was the biggest
+  // ergonomic gap users hit ("the button is just grey forever").
+  const hasGlobalFeedback = review.state.globalFeedback.trim().length > 0;
+  const reasonForRegen = (() => {
+    if (!hasGlobalFeedback && llmChecked === 0 && figuresChecked === 0) {
+      return "勾选「PPT · 讲稿」或「事实卡」中的项目并写反馈，或在底部「全局反馈」直接写整体方向，再点这里。";
+    }
+    if (figuresChecked > 0 && llmChecked === 0 && !hasGlobalFeedback) {
+      return "图像不走 LLM 重写。请到「切图」tab 用「重新切图」按钮，或单图右上角「重抽」「上传替换」。";
+    }
+    return "";
+  })();
+  const regenButtonLabel = (() => {
+    if (regenerate.isPending) return "重写中…";
+    if (llmChecked > 0) return `让 LLM 重写勾选项（${llmChecked}）`;
+    if (hasGlobalFeedback) return "用全局反馈重写讲稿";
+    return "让 LLM 重写";
+  })();
+  const regenButtonTooltip = llmChecked > 0
+    ? `LLM 会按你勾选的项目和反馈重写对应内容。完成后记得点「重新生成 PPT」把改动应用到 .pptx。`
+    : "把全局反馈作为整体指令发给 LLM，整篇 reading.json 重写。完成后讲稿/Slides 也会随之更新。";
 
   const runRegenerate = async () => {
     setRegenLog(null);
@@ -190,10 +232,18 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
    * multiple pages in PageEditDialog and wants one click to apply all
    * of them. SlidesScriptTab owns the per-row equivalent for single
    * pages — both call the same /review/rebuild endpoint server-side.
+   *
+   * After success we bump refreshToken which SlidesScriptTab watches
+   * to (a) re-call preview-render so its `previews` Map is replaced
+   * with the fresh URLs and (b) cache-bust the <img> src strings so
+   * the browser doesn't serve stale bytes from disk cache. Without
+   * the bump rebuild looks like a no-op even though the .pptx was
+   * actually rewritten.
    */
   const runRebuildAll = async () => {
     setRegenLog(null);
     const dirtyCount = review.dirtyCount;
+    setRegenLog("正在重做 PPT…（约 30 秒）");
     try {
       let res = await rebuildSlides
         .mutateAsync({ paperId, force: false })
@@ -216,11 +266,12 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
         : "";
       const reason = dirtyCount > 0
         ? `${dirtyCount} 页 PPT 与讲稿`
-        : "切图变化";
-      setRegenLog(`已按 JSON / 讲稿重做${reason}并刷新缩略图${cleared}。`);
+        : "切图与全量内容";
+      setRegenLog(`✓ 已用最新 JSON / 讲稿 / 切图重做 ${reason}并刷新缩略图${cleared}。`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg !== "已取消") setRegenLog(`重做失败：${msg}`);
+      else setRegenLog(null);
     }
   };
 
@@ -265,10 +316,18 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
         </div>
         {/* Inline guide — visible the moment the panel opens. */}
         <p className="mt-2 text-xs text-fg-muted leading-relaxed">
-          逐 Tab 浏览切图 / PPT 讲稿 / 事实卡。
-          <span className="text-success"> ✅ 不勾选 = 通过该项</span>。
-          觉得有问题 → 勾选并写反馈 → 点「局部重生」让 LLM 改写。全部 OK 后点
-          <span className="text-fg font-medium">「全部通过」</span>启动 TTS 与视频合成。
+          逐 Tab 检查内容。<span className="text-success">✅ 不勾选 = 通过</span>。
+          有问题 →
+          <span className="text-fg"> ① 勾选 + 写反馈</span>
+          或者
+          <span className="text-fg"> ② 在底部「全局反馈」直接写整体方向</span>
+          ，点
+          <span className="text-fg font-medium">「让 LLM 重写」</span>
+          。LLM 改完讲稿/Slides 后,点
+          <span className="text-fg font-medium">「重新生成 PPT」</span>
+          把改动应用到 .pptx。全部满意后
+          <span className="text-fg font-medium">「全部通过」</span>
+          。
         </p>
       </CardHeader>
 
@@ -285,7 +344,7 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
           size="sm"
           onClick={runRefresh}
           disabled={refreshFromDisk.isPending}
-          title="读取磁盘上当前的 PPT 与讲稿，重新渲染缩略图。审批通过时将直接发布手改 PPT，不再按模板重拼。"
+          title="你在 PowerPoint 里手改过 .pptx 后，点这个让审阅页拉取磁盘版本。审批时将直接发布手改 PPT。"
         >
           <HardDriveDownload
             size={14}
@@ -302,6 +361,11 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
           size="sm"
           onClick={runPreview}
           disabled={!canRegenerate}
+          title={
+            canRegenerate
+              ? "查看将要发给 LLM 的 prompt"
+              : reasonForRegen
+          }
         >
           <Eye size={14} />
           预览 prompt
@@ -311,31 +375,26 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
           size="sm"
           onClick={runRegenerate}
           disabled={!canRegenerate || regenerate.isPending}
-          title={
-            llmChecked === 0
-              ? "勾选「PPT · 讲稿」或「事实卡」中的项再点重生（图像不会用 LLM）"
-              : ""
-          }
+          title={canRegenerate ? regenButtonTooltip : reasonForRegen}
         >
           <Sparkles
             size={14}
             className={regenerate.isPending ? "animate-spin" : ""}
           />
-          {regenerate.isPending ? "重生中…" : `局部重生（${llmChecked}）`}
+          {regenerate.isPending ? "重写中…" : regenButtonLabel}
         </Button>
         <Button
           variant="secondary"
           size="sm"
           onClick={runRebuildAll}
-          disabled={
-            (review.dirtyCount === 0 && !figuresStale) || rebuildSlides.isPending
-          }
+          disabled={rebuildSlides.isPending}
           title={
-            review.dirtyCount === 0 && !figuresStale
-              ? "没有未应用的修改"
-              : figuresStale && review.dirtyCount === 0
-                ? "切图已更新但 PPT 仍嵌入旧图，点此把新切图同步到 PPT 并刷新缩略图（约 30 秒）"
-                : `用当前 JSON / 讲稿重做整份 PPT 并刷新所有缩略图（约 30 秒）`
+            rebuildSlides.isPending
+              ? "正在重新生成…"
+              : "用当前 JSON / 讲稿 + 切图重做整份 PPT 并刷新所有缩略图（约 30 秒）。"
+              + (review.dirtyCount === 0 && !figuresStale
+                ? " 即使没有变化也可点击，用于强制同步。"
+                : "")
           }
         >
           <Wand2
@@ -355,7 +414,7 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
           size="sm"
           disabled={!canApprove || approve.isPending}
           onClick={() => setApproveOpen(true)}
-          title={canApprove ? "确认全部通过" : `请先重生或手动修订被标记的 ${totalChecked} 项`}
+          title={canApprove ? "确认全部通过" : `请先重写或手动修订被标记的 ${totalChecked} 项`}
         >
           <CheckCheck size={14} />
           全部通过 →
@@ -423,7 +482,10 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
 
         <section className="rounded-lg border border-border bg-surface-2/40 p-3">
           <h4 className="text-xs font-medium text-fg-muted mb-2">
-            全局反馈（仅作用于「PPT · 讲稿」「事实卡」的 LLM 重生；图像不读此项）
+            全局反馈
+            <span className="ml-2 text-fg-muted/70 font-normal">
+              整体方向。即使没勾任何项，单独写一段也能直接点「让 LLM 重写」整篇重做。图像不读此项。
+            </span>
           </h4>
           <Textarea
             value={review.state.globalFeedback}
