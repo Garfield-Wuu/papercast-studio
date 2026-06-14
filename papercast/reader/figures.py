@@ -438,7 +438,16 @@ def _region_below_caption(
 
     rect = fitz.Rect(left, cap_bottom + _REGION_PAD_PT, right, bottom - _REGION_PAD_PT)
     rect = _expand_horizontal_to_words(rect, page, cap)
-    return rect if rect.height >= 30 and rect.width >= 30 else None
+    if rect.height < 30 or rect.width < 30:
+        return None
+    # Thin-table rescue: when the legacy text-block bound clips to the
+    # very first row of a text-rendered table (booktabs convention puts
+    # the row right after the caption block, so "nearest block below"
+    # is the table header itself), try extending downward through text
+    # rows. Same threshold as the visual_cluster path.
+    if rect.height < _THIN_TABLE_HEIGHT_PT:
+        rect = _extend_thin_table_with_text(page, rect, cap_bbox=cap.bbox)
+    return rect
 
 
 def _horizontal_extent(
@@ -635,6 +644,13 @@ _UNION_DIST_FRAC = 0.55
 # stop being part of the figure and are body text.
 _LABEL_SNAP_PT = 14.0
 
+# Thin-table rescue threshold. Tables often render as text with only
+# thin booktabs rules (top/header/bottom horizontal lines). The cluster
+# algorithm catches top+header (~17pt) but misses the closing rule and
+# the body rows. When a table crop is thinner than this, we sweep text
+# lines below the current union to capture the full table body.
+_THIN_TABLE_HEIGHT_PT = 60.0
+
 
 def _match_via_visual_cluster(page: fitz.Page, cap: _Caption) -> fitz.Rect | None:
     """Anchor `cap` to the page's visual content. Returns the crop bbox.
@@ -670,17 +686,22 @@ def _match_via_visual_cluster(page: fitz.Page, cap: _Caption) -> fitz.Rect | Non
 
     images = find_image_rects(page, DEFAULT_PARAMS)
     clusters = cluster_drawings(page, DEFAULT_PARAMS)
+    page_width = page.rect.width
 
     # Step 1: gather every same-direction candidate together with its
     # score and refined rect. We need the full list later for the union
     # pass, so we keep them all rather than just remembering the winner.
     scored: list[tuple[float, fitz.Rect]] = []
     for rect in images:
-        score, refined = score_match(cap.bbox, rect, direction, page_height)
+        score, refined = score_match(
+            cap.bbox, rect, direction, page_height, page_width=page_width,
+        )
         if score > 0 and refined is not None:
             scored.append((score, refined))
     for cluster in clusters:
-        score, refined = score_match(cap.bbox, cluster, direction, page_height)
+        score, refined = score_match(
+            cap.bbox, cluster, direction, page_height, page_width=page_width,
+        )
         if score > 0 and refined is not None:
             scored.append((score, refined))
 
@@ -732,9 +753,24 @@ def _match_via_visual_cluster(page: fitz.Page, cap: _Caption) -> fitz.Rect | Non
     # like "a/b/c" (single-letter panel keys) and "Door opening" /
     # "Pouring" (descriptive panel names) sit a few points outside the
     # raw image bboxes; without this pass the crop slices them off.
-    union = _grow_union_with_labels(
-        page, union, col_x0=col_x0, col_x1=col_x1, cap_bbox=cap.bbox,
-    )
+    # SKIP for tables in the thin-table regime — label growth would pull
+    # in a few rows and push the rect over the thin-table threshold,
+    # blocking the real extension logic that walks ALL rows.
+    if direction != "down" or union.height >= _THIN_TABLE_HEIGHT_PT:
+        union = _grow_union_with_labels(
+            page, union, col_x0=col_x0, col_x1=col_x1, cap_bbox=cap.bbox,
+        )
+
+    # Step 4: thin-table rescue. When a table is rendered as text +
+    # booktabs rules (top/header/bottom horizontal rules), the cluster
+    # algorithm picks up the top + header rules (~17pt tall total) but
+    # misses the closing rule and the text rows in between. Extend the
+    # union downward by sweeping text lines until we hit the closing
+    # rule or run out of table rows.
+    if direction == "down" and union.height < _THIN_TABLE_HEIGHT_PT:
+        union = _extend_thin_table_with_text(
+            page, union, cap_bbox=cap.bbox,
+        )
 
     return _pad_and_clamp(union, page.rect)
 
@@ -804,6 +840,139 @@ def _pad_and_clamp(rect: fitz.Rect, page_rect: fitz.Rect) -> fitz.Rect:
     if x1 - x0 < 30 or y1 - y0 < 30:
         return rect  # padding collapsed it; let the caller use the raw rect
     return fitz.Rect(x0, y0, x1, y1)
+
+
+# ---------------------------------------------------------------------------
+# Thin-table rescue
+# ---------------------------------------------------------------------------
+
+
+# When sweeping text rows downward, two consecutive rows whose vertical
+# gap exceeds this many points are treated as a paragraph boundary —
+# typically the table has ended and the next paragraph started. Booktabs
+# tables print row leading at 8-12pt; 18pt is a safe gap floor.
+_TABLE_ROW_GAP_PT = 18.0
+
+# Hard cap on how far below the caption a thin-table extension can reach.
+# Expressed as a fraction of page height — protects against runaway
+# extension when no closing rule exists and rows blend straight into
+# body paragraphs.
+_TABLE_EXTEND_DIST_FRAC = 0.55
+
+# A line wider than this fraction of the table's horizontal span is
+# almost certainly a body paragraph that wraps across the column —
+# tables don't have wrap-around rows. Stop here.
+_TABLE_BODY_LINE_WIDTH_FRAC = 0.85
+
+
+def _extend_thin_table_with_text(
+    page: fitz.Page,
+    union: fitz.Rect,
+    *,
+    cap_bbox: tuple[float, float, float, float],
+) -> fitz.Rect:
+    """Extend a too-thin table crop downward by sweeping text rows.
+
+    Used when the visual cluster algorithm only captured the top/header
+    booktabs rules of a table (~17pt tall) but the table BODY is text
+    rows that have no surrounding vector paths. We sweep `get_text` lines
+    below the current union and grow it to include rows that look like
+    table cells, stopping at:
+      - a horizontal rule (the closing booktabs line)
+      - a line wider than ~85% of the table span (body paragraph wrap)
+      - a row gap greater than `_TABLE_ROW_GAP_PT` (paragraph break)
+      - the page-height cap
+
+    Why text rows and not text blocks: PyMuPDF clusters table cells into
+    one giant `block` per table on Elsevier layouts, but the individual
+    `lines` inside that block are precisely the cells/rows we want.
+    """
+    page_rect = page.rect
+    cap_y1 = cap_bbox[3]
+    sweep_left = union.x0
+    sweep_right = union.x1
+    table_width = sweep_right - sweep_left
+    if table_width <= 0:
+        return union
+    body_width_floor = table_width * _TABLE_BODY_LINE_WIDTH_FRAC
+    max_extension = page_rect.height * _TABLE_EXTEND_DIST_FRAC
+
+    # Collect candidate text rows below the union.
+    rows: list[fitz.Rect] = []
+    try:
+        text_dict = page.get_text("dict")
+    except Exception:  # noqa: BLE001 — never break extraction on text layer issues
+        return union
+    for blk in text_dict.get("blocks", []):
+        if blk.get("type") != 0:
+            continue
+        for line in blk.get("lines", []):
+            bb = line.get("bbox")
+            if not bb:
+                continue
+            lx0, ly0, lx1, ly1 = bb
+            # Below the current union? Allow tiny overlap.
+            if ly0 < union.y1 - 2:
+                continue
+            # Inside the table's horizontal span (loose — table cells
+            # may be a hair narrower than the rules)?
+            if lx1 < sweep_left - 4 or lx0 > sweep_right + 4:
+                continue
+            # Within the page-height cap from the caption?
+            if ly0 - cap_y1 > max_extension:
+                continue
+            text = "".join(
+                s.get("text", "") for s in line.get("spans", [])
+            ).strip()
+            if not text:
+                continue
+            rows.append(fitz.Rect(lx0, ly0, lx1, ly1))
+
+    rows.sort(key=lambda r: r.y0)
+
+    # Find the closing booktabs rule (horizontal drawing path) below the
+    # current union — it sets a hard ceiling on how far we extend.
+    closing_rule_y: float | None = None
+    for d in page.get_drawings():
+        r = d.get("rect")
+        if r is None:
+            continue
+        if r.height > 3.0 or r.width < table_width * 0.6:
+            continue
+        if r.y0 < union.y1:
+            continue
+        if r.y0 - cap_y1 > max_extension:
+            continue
+        # Rule must be inside our horizontal span.
+        if r.x0 > sweep_right or r.x1 < sweep_left:
+            continue
+        if closing_rule_y is None or r.y0 < closing_rule_y:
+            closing_rule_y = r.y0
+
+    grown = fitz.Rect(union)
+    last_y1 = union.y1
+    for row in rows:
+        # Stop at the closing rule.
+        if closing_rule_y is not None and row.y0 >= closing_rule_y - 1:
+            break
+        # Paragraph-gap stop.
+        if row.y0 - last_y1 > _TABLE_ROW_GAP_PT:
+            break
+        # Body-paragraph wrap stop (line spans most of the table width).
+        # We use width as a proxy because table cell text rarely fills
+        # the full inter-rule span (cells have padding); a near-full-
+        # width line is much more likely to be wrapped body text.
+        if (row.x1 - row.x0) >= body_width_floor and last_y1 > union.y1 + 2:
+            break
+        grown |= row
+        last_y1 = row.y1
+
+    # If we found a closing rule, extend bottom to JUST above it (rule
+    # itself isn't a row but visually marks the table end).
+    if closing_rule_y is not None and grown.y1 < closing_rule_y:
+        grown = fitz.Rect(grown.x0, grown.y0, grown.x1, closing_rule_y)
+
+    return grown
 
 
 # Reference exposed for tests and downstream callers that want to walk

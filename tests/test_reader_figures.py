@@ -435,6 +435,106 @@ def test_match_via_visual_cluster_drops_other_column_candidates() -> None:
     )
 
 
+def test_match_via_visual_cluster_handles_side_by_side() -> None:
+    """Elsevier two-column layouts often place figure in one column and
+    caption in the adjacent column at overlapping y-range. The scoring
+    should accept this side-by-side pattern (direction='up', y-overlap,
+    opposite sides of page center)."""
+    from papercast.reader.figures import _match_via_visual_cluster, _Caption
+    import papercast.reader._clusters as cmod
+    import fitz
+
+    class _StubPage:
+        rect = fitz.Rect(0, 0, 595, 842)
+        def get_text(self, _kind):  # noqa: ARG002
+            return {"blocks": []}
+
+    # Caption in RIGHT column at y=588-715
+    cap = _Caption(
+        block_idx=0,
+        bbox=(408, 588, 560, 715),
+        kind="figure",
+        label_text="Fig. 1",
+        label_number=1,
+        full_text="Fig. 1. Data collection settings.",
+    )
+    # Image in LEFT column at overlapping y-range
+    image_left_col = fitz.Rect(37, 591, 397, 734)
+
+    orig_images = cmod.find_image_rects
+    orig_clusters = cmod.cluster_drawings
+    cmod.find_image_rects = lambda _page, _params=None: [image_left_col]
+    cmod.cluster_drawings = lambda _page, _params=None: []
+    try:
+        rect = _match_via_visual_cluster(_StubPage(), cap)
+    finally:
+        cmod.find_image_rects = orig_images
+        cmod.cluster_drawings = orig_clusters
+
+    assert rect is not None, "side-by-side image should be accepted"
+    # Should return the full image rect (not clipped to caption y-range)
+    assert abs(rect.x0 - image_left_col.x0) < 10
+    assert abs(rect.y0 - image_left_col.y0) < 10
+    assert abs(rect.x1 - image_left_col.x1) < 10
+    assert abs(rect.y1 - image_left_col.y1) < 10
+
+
+def test_match_via_visual_cluster_extends_thin_table_with_text() -> None:
+    """When a table's visual cluster is just the thin top/header booktabs
+    rules (~17pt tall), the thin-table rescue should extend downward
+    through text rows until hitting the closing rule or paragraph gap."""
+    from papercast.reader.figures import _match_via_visual_cluster, _Caption
+    import papercast.reader._clusters as cmod
+    import fitz
+
+    # Synthetic PDF: table with top rule (17pt cluster), text rows 80pt
+    # tall, and bottom rule at y=180.
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    # Top rule at y=100-101
+    page.draw_line((40, 100), (555, 100), width=0.5)
+    # Header separator at y=116-117
+    page.draw_line((40, 116), (555, 116), width=0.5)
+    # Text rows at y=120, 135, 150, 165 (each ~10pt tall, 15pt row leading)
+    for i, txt in enumerate(["Header", "Row1", "Row2", "Row3"]):
+        page.insert_text((50, 120 + i * 15), txt, fontsize=10)
+    # Bottom rule at y=180
+    page.draw_line((40, 180), (555, 180), width=0.5)
+
+    cap = _Caption(
+        block_idx=0,
+        bbox=(40, 80, 120, 95),
+        kind="table",
+        label_text="Table 1",
+        label_number=1,
+        full_text="Table 1\nTest.",
+    )
+
+    # Cluster returns top+header rules only (~17pt)
+    thin_cluster = cmod.VisualCluster(
+        bbox=(40, 100, 555, 117),
+        kind="drawing",
+        path_count=2,
+    )
+
+    orig_images = cmod.find_image_rects
+    orig_clusters = cmod.cluster_drawings
+    cmod.find_image_rects = lambda _page, _params=None: []
+    cmod.cluster_drawings = lambda _page, _params=None: [thin_cluster]
+    try:
+        rect = _match_via_visual_cluster(page, cap)
+    finally:
+        cmod.find_image_rects = orig_images
+        cmod.cluster_drawings = orig_clusters
+        doc.close()
+
+    assert rect is not None
+    # Should extend from top of cluster (100) to just below the last row,
+    # stopping at the closing rule (180). Allow padding.
+    assert rect.y0 < 105, f"top edge should be near 100, got {rect.y0}"
+    assert rect.y1 > 175, f"bottom should extend to ~180, got {rect.y1}"
+
+
 def test_caption_finder_rejects_long_first_line() -> None:
     """Even without a blacklisted verb, a first line over 80 chars is
     almost certainly body text."""

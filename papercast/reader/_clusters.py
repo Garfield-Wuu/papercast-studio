@@ -209,6 +209,7 @@ def score_match(
     candidate: Candidate,
     direction: Direction,
     page_height: float,
+    page_width: float | None = None,
 ) -> tuple[float, fitz.Rect | None]:
     """Score how well `candidate` matches the caption in the given direction.
 
@@ -231,6 +232,8 @@ def score_match(
 
     `direction='up'`  — figure case (caption below figure).
     `direction='down'` — table case (caption above table).
+    `page_width` — optional, enables side-by-side layout detection for
+        figures in two-column papers (Elsevier style).
     """
     cx0, cy0, cx1, cy1 = caption_bbox
     cand_rect = candidate.rect if isinstance(candidate, VisualCluster) else candidate
@@ -238,9 +241,11 @@ def score_match(
 
     caption_inside = ry0 <= cy0 and ry1 >= cy1
     fit, refined_bbox = _fit_score(
+        cx0=cx0, cx1=cx1,
         cy0=cy0, cy1=cy1,
         ry0=ry0, ry1=ry1, rx0=rx0, rx1=rx1,
         direction=direction, caption_inside=caption_inside,
+        page_width=page_width,
     )
     if fit <= 0:
         return 0.0, None
@@ -263,15 +268,21 @@ def score_match(
 
 def _fit_score(
     *,
+    cx0: float, cx1: float,
     cy0: float, cy1: float,
     ry0: float, ry1: float, rx0: float, rx1: float,
     direction: Direction,
     caption_inside: bool,
+    page_width: float | None = None,
 ) -> tuple[float, fitz.Rect | None]:
     """Method D's fit score (§2.4 评分机制).
 
     Returns (fit, refined_bbox). fit=0 means "wrong direction, skip"
     (refined is None). Otherwise refined is the bbox to crop with.
+
+    `page_width` enables side-by-side layout detection (Elsevier-style
+    two-column papers where image and caption sit in adjacent columns
+    at overlapping y-ranges).
     """
     # Case A: caption sits inside cluster — Tables often print their
     # caption as the first row of the grid. Score it generously and
@@ -299,7 +310,24 @@ def _fit_score(
     if direction == "down" and ry0 >= cy1:
         return 1.0, fitz.Rect(rx0, ry0, rx1, ry1)
 
-    # Case C: cluster straddles the caption — partial credit for the
+    # Case C: side-by-side layout (figure case only, needs page_width).
+    # Elsevier two-column style often places image in one column and
+    # caption in the adjacent column at overlapping y-range. Detect:
+    # candidate and caption on opposite sides of page center, with
+    # significant y-overlap.
+    if direction == "up" and page_width is not None:
+        y_overlap = min(ry1, cy1) - max(ry0, cy0)
+        if y_overlap > 0:
+            # They overlap vertically. Check horizontal separation.
+            cap_cx = (cx0 + cx1) / 2
+            cand_cx = (rx0 + rx1) / 2
+            page_cx = page_width / 2
+            # Accept if they're on opposite sides of page center
+            if (cap_cx < page_cx < cand_cx) or (cand_cx < page_cx < cap_cx):
+                # Side-by-side confirmed — accept full candidate
+                return 1.0, fitz.Rect(rx0, ry0, rx1, ry1)
+
+    # Case D: cluster straddles the caption — partial credit for the
     # portion in the matching direction. Refined bbox clips to the
     # matching half.
     if direction == "up":
