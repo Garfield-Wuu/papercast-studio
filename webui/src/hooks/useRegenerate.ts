@@ -26,6 +26,14 @@ interface RegenerateResponse {
     pages_updated?: number[];
     backup?: string | null;
     stale?: string[];
+    // Cascade fields (target=reading only): server may auto-rebuild
+    // slides_plan + script from the new reading. See
+    // _cascade_downstream_from_reading in review_service.py.
+    slides_plan_regenerated?: boolean;
+    script_regenerated?: boolean;
+    cascade_duration_sec?: number;
+    cascade_error?: string;
+    manual_override_cleared?: boolean;
   };
 }
 

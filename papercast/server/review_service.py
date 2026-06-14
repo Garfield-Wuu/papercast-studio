@@ -687,6 +687,7 @@ def regenerate_reading(
     feedback: str | None,
     *,
     provider_factory=None,
+    cascade: bool = True,
 ) -> dict[str, Any]:
     """Re-write specific reading.json sections via the LLM.
 
@@ -697,6 +698,13 @@ def regenerate_reading(
     the original reading + the user's feedback. Replace only the
     sections the user flagged; leave fact_cards / key_terms intact
     unless the user explicitly mentioned them.
+
+    Cascade behavior (default):
+      After rewriting reading.json, automatically regenerate slides_plan
+      and script so downstream artifacts reflect the new reading. This
+      is the main fix for "global feedback on slides doesn't work" bug.
+      Set cascade=False to disable (useful in tests or when the caller
+      will handle downstream updates manually).
     """
     from papercast.llm.client import build_provider
     from papercast.llm.prompts import cached_prompt
@@ -746,13 +754,138 @@ def regenerate_reading(
     # an updated artifact nor the override flag.
     manual_cleared = clear_manual_override(cfg, paper_id)
 
+    # Cascade: regenerate slides_plan + script from the new reading.
+    # This ensures downstream artifacts reflect the changes. Before this
+    # fix, regenerate_reading would mark them "stale" but wouldn't
+    # actually rebuild them, so user feedback on slides/figures never
+    # took effect.
+    cascade_detail = {}
+    if cascade:
+        try:
+            cascade_detail = _cascade_downstream_from_reading(cfg, paper_id)
+        except Exception as exc:  # noqa: BLE001
+            # Log but don't fail the entire regenerate if cascade breaks.
+            # The reading.json update already committed; downstream can
+            # be manually rebuilt via "重新生成 PPT" button.
+            logger.warning(
+                "reading regenerate succeeded but cascade failed for %s: %s",
+                paper_id, exc,
+            )
+            cascade_detail = {"cascade_error": str(exc)}
+
     return {
         "target": "reading",
         "sections_updated": sorted(revisions.keys()),
         "backup": str(backup) if backup else None,
-        "stale": ["slides_plan", "script"],
+        "stale": [],  # empty now that we cascaded
         "manual_override_cleared": manual_cleared,
+        **cascade_detail,
     }
+
+
+def _cascade_downstream_from_reading(
+    cfg: Config, paper_id: str,
+) -> dict[str, Any]:
+    """Regenerate slides_plan + script from the newly-updated reading.json.
+
+    Called by regenerate_reading after it rewrites reading.json. This is
+    the fix for "global feedback on slides doesn't work" — before this,
+    reading rewrites marked slides_plan/script as stale but didn't
+    actually regenerate them, so user feedback about slides/figures never
+    took effect.
+
+    Returns detail dict with keys:
+      - slides_plan_regenerated: bool
+      - script_regenerated: bool
+      - cascade_duration_sec: float (optional)
+
+    Raises any exception from the LLM calls (caller should log + continue).
+    """
+    import time
+    from papercast.llm.client import build_provider
+    from papercast.llm.planner import AnthropicPlanner, write_slides_plan
+    from papercast.llm.scripter import AnthropicScripter, write_script_markdown
+    from papercast.reader.figures import FigureRecord
+    from papercast.reader.reading import FactCard, FiveSectionReading
+    from papercast.author.render import load_slides_plan
+
+    start = time.monotonic()
+    work = Path(cfg.paths.work) / paper_id
+    reading_path = work / "reading.json"
+    figures_path = work / "figures" / "figures.json"
+    plan_path = work / "slides_plan.json"
+    script_path = work / "script.md"
+    template_meta_path = Path(cfg.paths.template_meta)
+
+    # Load reading + figures
+    reading_payload = json.loads(reading_path.read_text(encoding="utf-8"))
+    reading = FiveSectionReading(
+        literature_intro=reading_payload["literature_intro"],
+        research_question=reading_payload["research_question"],
+        methods=reading_payload["methods"],
+        findings=reading_payload["findings"],
+        discussion=reading_payload["discussion"],
+        key_terms=list(reading_payload.get("key_terms", [])),
+        fact_cards=[
+            FactCard(claim=c["claim"], evidence=c["evidence"], page=int(c["page"]))
+            for c in reading_payload.get("fact_cards", [])
+        ],
+    )
+    figures_payload = json.loads(figures_path.read_text(encoding="utf-8"))
+    figures = [
+        FigureRecord(
+            id=f["id"], type=f["type"], page=f["page"], label=f["label"],
+            filename=f["filename"], bbox=tuple(f["bbox"]), caption=f.get("caption", ""),
+        )
+        for f in figures_payload
+    ]
+    template_meta = json.loads(template_meta_path.read_text(encoding="utf-8"))
+
+    # Load start_meta for Cover placeholders
+    start_meta = load_start_meta(cfg, paper_id)
+    cover_meta: dict[str, str] = {}
+    if "reviewer" in start_meta:
+        cover_meta["REPORTER"] = start_meta["reviewer"]
+    if "major" in start_meta:
+        cover_meta["MAJOR"] = start_meta["major"]
+
+    # Regenerate slides_plan from scratch
+    provider = build_provider(cfg.llm.author.to_spec())
+    planner = AnthropicPlanner(provider, prompts_dir=Path(cfg.paths.prompts))
+    plan = planner.plan(
+        reading=reading,
+        figures=figures,
+        template_meta=template_meta,
+        paper_id=paper_id,
+        target_pages=tuple(cfg.slides.target_pages),
+        target_duration_sec=int(sum(cfg.slides.target_duration_sec) / 2),
+        report_date_placeholder="{{REPORT_DATE}}",
+        cover_meta=cover_meta or None,
+    )
+    _backup_artifact(work, "slides_plan.json")
+    write_slides_plan(plan, plan_path)
+    logger.info("cascaded: regenerated slides_plan.json for %s", paper_id)
+
+    # Regenerate script from the new slides_plan
+    scripter = AnthropicScripter(provider, prompts_dir=Path(cfg.paths.prompts))
+    script = scripter.write(
+        plan=plan,
+        reading=reading,
+        speaking_rate_cpm=cfg.slides.speaking_rate_cpm,
+        target_duration_sec=tuple(cfg.slides.target_duration_sec),
+    )
+    _backup_artifact(work, "script.md")
+    write_script_markdown(script, script_path)
+    logger.info("cascaded: regenerated script.md for %s", paper_id)
+
+    elapsed = time.monotonic() - start
+    return {
+        "slides_plan_regenerated": True,
+        "script_regenerated": True,
+        "cascade_duration_sec": round(elapsed, 2),
+    }
+
+
 
 
 def regenerate_script_pages(

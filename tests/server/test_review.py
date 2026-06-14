@@ -210,6 +210,84 @@ def test_regenerate_reading_409_when_file_missing(
     assert r.status_code == 409
 
 
+def test_regenerate_reading_cascades_to_slides_and_script(
+    client: TestClient, workspace: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When reading.json is rewritten, the server should automatically
+    regenerate slides_plan.json and script.md from the new reading so
+    downstream artifacts reflect the changes. This is the fix for the
+    "global feedback on slides doesn't work" bug."""
+    pid = _upload(client, workspace)
+    work = workspace / "work" / pid
+    _stub_reading_file(workspace, pid)
+
+    # Stub figures.json + template_meta for the planner
+    (work / "figures").mkdir(parents=True, exist_ok=True)
+    (work / "figures" / "figures.json").write_text(
+        json.dumps([
+            {"id": "fig_1", "type": "figure", "page": 2, "label": "Figure 1",
+             "filename": "fig_1.png", "bbox": [0, 0, 100, 100], "caption": "Test"},
+            {"id": "paper_first_page", "type": "figure", "page": 1, "label": "",
+             "filename": "paper_first_page.png", "bbox": [0, 0, 200, 200], "caption": ""},
+        ], ensure_ascii=False), encoding="utf-8",
+    )
+
+    # Stub LLM responses: reading rewrite, then planner, then scripter
+    call_count = 0
+    def _multi_response_stub(_spec):
+        class _Stub:
+            def complete(self, prompt: str) -> str:
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    # Reading rewrite
+                    return '{"methods": "UPDATED methods section"}'
+                elif call_count == 2:
+                    # Planner response
+                    return json.dumps({
+                        "paper_id": pid,
+                        "total_pages": 3,
+                        "target_duration_sec": 360,
+                        "pages": [
+                            {"page_no": 1, "layout": "Cover", "fields": {"Title": "New Title"}},
+                            {"page_no": 2, "layout": "Background", "fields": {"Subtitle": "New", "Image": "fig_1"}},
+                            {"page_no": 3, "layout": "Closing", "fields": {}},
+                        ],
+                    })
+                else:
+                    # Scripter response
+                    return "## Page 1\nNew cover script.\n\n## Page 2\nNew body.\n\n## Page 3\nClosing.\n"
+        return _Stub()
+
+    monkeypatch.setattr("papercast.llm.client.build_provider", _multi_response_stub)
+
+    # Trigger regenerate with global feedback (no specific section)
+    r = client.post(
+        f"/api/papers/{pid}/review/regenerate",
+        json={"target": "reading", "items": [], "feedback": "请使用更正式的语气，并改用不同的插图"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["target"] == "reading"
+    # Cascade should have happened
+    assert body["detail"]["slides_plan_regenerated"] is True
+    assert body["detail"]["script_regenerated"] is True
+    assert "cascade_duration_sec" in body["detail"]
+
+    # Verify files were updated
+    reading = json.loads((work / "reading.json").read_text(encoding="utf-8"))
+    assert reading["methods"] == "UPDATED methods section"
+
+    plan = json.loads((work / "slides_plan.json").read_text(encoding="utf-8"))
+    assert plan["total_pages"] == 3
+    assert plan["pages"][0]["fields"]["Title"] == "New Title"
+    assert plan["pages"][1]["fields"]["Image"] == "fig_1"
+
+    script_text = (work / "script.md").read_text(encoding="utf-8")
+    assert "New cover script" in script_text
+    assert "## Page 2" in script_text
+
+
 def test_regenerate_script_rewrites_one_page(
     client: TestClient, workspace: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

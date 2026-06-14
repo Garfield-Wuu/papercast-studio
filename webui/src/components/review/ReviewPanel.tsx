@@ -186,6 +186,7 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
     try {
       const detail: string[] = [];
       let clearedOverride = false;
+      let cascadeError: string | undefined;
       for (const b of batches) {
         const res = await regenerate.mutateAsync({
           paperId,
@@ -197,13 +198,28 @@ export function ReviewPanel({ paperId, defaultVoice }: Props) {
           detail.push(`reading: ${res.detail.sections_updated.join(", ")}`);
         if (res.detail.pages_updated)
           detail.push(`${b.target}: pages ${res.detail.pages_updated.join(", ")}`);
-        if ((res.detail as { manual_override_cleared?: boolean }).manual_override_cleared)
+        // Surface cascade results — when reading is rewritten, the
+        // server now auto-rebuilds slides_plan + script so the user
+        // doesn't need to manually trigger downstream regeneration.
+        if (res.detail.slides_plan_regenerated) {
+          detail.push("slides_plan: 已自动重建");
+        }
+        if (res.detail.script_regenerated) {
+          detail.push("script: 已自动重建");
+        }
+        if (res.detail.cascade_error) {
+          cascadeError = res.detail.cascade_error;
+        }
+        if (res.detail.manual_override_cleared)
           clearedOverride = true;
       }
       const suffix = clearedOverride
         ? "（注意：本次重生覆盖了之前的手改，如需保留手改请重新点「刷新页面」）"
         : "";
-      setRegenLog(`已重生：${detail.join(" · ")}${suffix}`);
+      const errorSuffix = cascadeError
+        ? `（下游级联失败：${cascadeError}，请手动点「重新生成 PPT」）`
+        : "";
+      setRegenLog(`已重生：${detail.join(" · ")}${suffix}${errorSuffix}`);
       if (clearedOverride) setManualOverride(false);
       review.clearTab("slides");
       review.clearTab("facts");
