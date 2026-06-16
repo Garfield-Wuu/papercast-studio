@@ -4,7 +4,7 @@
 
 # papercast-studio
 
-**把一篇 PDF 论文变成一段 8 分钟的实验室分享视频 —— 端到端自动。**
+**把一篇 PDF 论文变成一段汇报视频 —— 端到端自动。**
 
 PDF → 精读 → 切片规划 → 讲稿 → 审阅 → TTS → 视频。<br/>
 12 阶段流水线，配套 Web UI、声音克隆、人工审阅闭环。
@@ -12,11 +12,11 @@ PDF → 精读 → 切片规划 → 讲稿 → 审阅 → TTS → 视频。<br/>
 [![release](https://img.shields.io/github/v/release/Garfield-Wuu/papercast-studio?style=flat-square&color=blueviolet)](https://github.com/Garfield-Wuu/papercast-studio/releases)
 [![python](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
 [![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-95%20passing-success?style=flat-square)](#-测试)
+[![CI](https://img.shields.io/github/actions/workflow/status/Garfield-Wuu/papercast-studio/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Garfield-Wuu/papercast-studio/actions)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey?style=flat-square)](#-安装)
 [![English](https://img.shields.io/badge/lang-English-blue?style=flat-square)](README.md)
 
-[**快速开始**](#-快速开始) · [**功能特性**](#-功能特性) · [**Web UI**](#-web-ui) · [**架构**](#-架构) · [**文档**](docs/) · [English](README.md)
+[**快速开始**](#-快速开始) · [**功能特性**](#-功能特性) · [**Web UI**](#-web-ui) · [**架构**](#-架构) · [**CLI**](#-cli) · [English](README.md)
 
 </div>
 
@@ -53,7 +53,7 @@ PDF → 精读 → 切片规划 → 讲稿 → 审阅 → TTS → 视频。<br/>
 git clone https://github.com/Garfield-Wuu/papercast-studio.git
 cd papercast-studio
 
-# Python 环境（注意：用独立的 env 名，避免与 v1 仓库的 papercast env 冲突）
+# Python 环境
 conda create -n papercast-studio python=3.11 -y
 conda activate papercast-studio
 pip install -e ".[dev,llm]"
@@ -66,8 +66,8 @@ cp config/secrets.example.env  config/secrets.env   # 填 MINIMAX_API_KEY 等
 papercast template-parse
 
 # 验证安装
-pytest                  # 95 passed
-papercast --help        # CLI 命令列表
+pytest -q              # 跑完整测试套件
+papercast --help       # CLI 命令列表
 ```
 
 然后双击 **`dev.bat`**（Windows）—— 同时打开两个 PowerShell 窗口，分别跑 FastAPI 后端（`:8765`）和 Vite 前端（`:5173`）。或直接调 `dev.ps1` 加 `-BackendOnly` / `-FrontendOnly`。
@@ -233,37 +233,23 @@ ls output/                                          # → 2026-05-29_a1b2c3d4e5.
 
 ---
 
-## 🚀 Hermes 部署
+## 🚀 自动化部署
 
-papercast-studio 在 Hermes 上是常驻服务（cron + Discord 触发）。
+可以作为常驻服务跑 —— 把手动跑的 CLI 命令交给定时器执行就好。
 
 <details>
-<summary><b>cron 配置</b></summary>
+<summary><b>cron / systemd timer 示例</b></summary>
 
 ```cron
 # 每天 9:07 兜底扫一次 inbox
-7 9 * * *    cd /opt/papercast-studio && uv run papercast scan
+7 9 * * *    cd /opt/papercast-studio && papercast scan
 
 # 每 5 分钟把可推进的任务往前推一格（TTS 异步轮询、视频合成需要持续 tick）
-*/5 * * * *  cd /opt/papercast-studio && uv run papercast tick
+*/5 * * * *  cd /opt/papercast-studio && papercast tick
 
 # 每小时给失败任务一次重试机会
-13 * * * *   cd /opt/papercast-studio && uv run papercast retry-failed
+13 * * * *   cd /opt/papercast-studio && papercast retry-failed
 ```
-
-</details>
-
-<details>
-<summary><b>Discord 触发流</b></summary>
-
-| 用户在 Discord 说 | Hermes 执行 |
-|---|---|
-| 「我上传了一篇新文献，扫一下」 | `papercast scan` 然后 `papercast tick` |
-| 「a1b2c3 现在到哪了」 | `papercast status a1b2c3` |
-| 「a1b2c3 审核通过，日期 2026-05-29」 | `papercast approve a1b2c3 --report-date 2026-05-29 --reviewer <user>` |
-| 「重试一下失败的」 | `papercast retry-failed` |
-
-Discord 监听层在 Hermes 侧，不在本仓库。
 
 </details>
 
@@ -272,25 +258,11 @@ Discord 监听层在 Hermes 侧，不在本仓库。
 ## 🧪 测试
 
 ```bash
-pytest                                      # 95 passed，无外部依赖
-pytest --cov=papercast --cov-report=term    # 覆盖率
-pytest tests/test_author_render.py -v       # 单文件
+pytest -q                                   # 跑完整测试套件，无外部依赖
+pytest --cov=papercast --cov-report=term    # 带覆盖率
 ```
 
-| 模块 | 测试数 | 覆盖率 |
-|---|---:|---:|
-| author/template | 15 | 96% |
-| author/render | 16 | — |
-| reader/pdf | 7 | 97% |
-| reader/figures | 10 | 88% |
-| reader/reading | 9 | 91% |
-| voicer/adapter | 9 | 91% |
-| composer | 11 | 88% |
-| notifier/review_pack | 8 | 96% |
-| core/state, db, scanner | 10 | 95% 平均 |
-| **整体** | **95** | **79%** |
-
-> Pipeline runner 文件（reader/voicer/composer/pipeline.py）覆盖率 0%，因为它们是端到端胶水 —— 验证靠真实 `papercast tick`，不靠单测。
+`tests/` 覆盖状态机、PDF 解析、图表抽取、PPT 装配、voicer 适配器、composer 和 FastAPI 服务。Pipeline runner 胶水（`*/pipeline.py`）靠真实 `papercast tick` 验证，不靠单测。
 
 ---
 
@@ -310,7 +282,7 @@ bootstrap/                       # Windows 便携打包脚本
 docs/                            # 设计文档 + API + 计划文档
 templates/                       # PPT 母版 + 解析后 schema
 prompts/                         # LLM Prompt 模板
-tests/                           # 95 个 pytest 单元测试
+tests/                           # pytest 测试套件
 ```
 
 ---
@@ -321,6 +293,13 @@ tests/                           # 95 个 pytest 单元测试
 <summary><b><code>MINIMAX_API_KEY not set</code></b></summary>
 
 环境变量没注入。可以在 Settings 页填（写到 `secrets.env`），或在 shell 里 `export`。
+
+</details>
+
+<details>
+<summary><b>MiniMax 报错 <code>token not match group</code>（status 1004）</b></summary>
+
+2025 年中之后新签发的 MiniMax token 不再把 group 编进 JWT，每次请求必须带 `GroupId` 查询参数。在 MiniMax 控制台复制 **Group ID** 粘贴到 Settings → TTS → MiniMax Group ID（或在 `config/secrets.env` 里设 `MINIMAX_GROUP_ID`）。老 token 自带 group claim，可以留空。
 
 </details>
 
@@ -369,7 +348,6 @@ MIT，见 [`LICENSE`](LICENSE)。
 
 <div align="center">
 
-为 [literature-video-agent](https://github.com/Garfield-Wuu/literature-video-agent) 而生。
 
 [报告 bug](https://github.com/Garfield-Wuu/papercast-studio/issues) · [功能建议](https://github.com/Garfield-Wuu/papercast-studio/issues) · [English](README.md)
 

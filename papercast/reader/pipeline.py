@@ -25,7 +25,6 @@ from papercast.reader.pdf import ParsedDocument, ParsedPage, TextBlock, parse_pd
 from papercast.reader.reading import (
     FigureRecord,
     LLMReader,
-    read_paper,
     write_reading,
 )
 
@@ -60,7 +59,14 @@ def run_figures(cfg: Config, paper_id: str) -> None:
 
 
 def run_reading(cfg: Config, paper_id: str, reader: LLMReader) -> None:
-    """figures_split → read_done: produce the five-section reading.json."""
+    """figures_split → read_done: produce the five-section reading.json.
+
+    On parse failure (LLM returned non-JSON / refusal / reasoning-only),
+    write the raw response to `work/<pid>/reading_raw.txt` so operators
+    can diagnose without re-running the whole stage. The raw file is
+    silently overwritten on every attempt — only the latest failure is
+    kept, which is what we want for debugging.
+    """
     work = Path(cfg.paths.work) / paper_id
     parsed_path = work / "parsed.json"
     figures_path = work / "figures" / "figures.json"
@@ -70,7 +76,24 @@ def run_reading(cfg: Config, paper_id: str, reader: LLMReader) -> None:
         raise FileNotFoundError(f"missing figures.json: {figures_path}")
     parsed = _load_parsed(parsed_path)
     figures = _load_figures(figures_path)
-    reading = read_paper(parsed, figures, reader=reader)
+
+    # Inline the read_paper() call so we can capture the raw response
+    # before parse_reading_response() loses it on failure.
+    from papercast.reader.reading import (
+        build_reading_prompt,
+        parse_reading_response,
+    )
+
+    prompt = build_reading_prompt(parsed, figures)
+    raw = reader.complete(prompt)
+    try:
+        reading = parse_reading_response(raw)
+    except ValueError:
+        try:
+            (work / "reading_raw.txt").write_text(raw, encoding="utf-8")
+        except OSError:
+            pass  # best-effort; original ValueError is the real signal
+        raise
     write_reading(reading, work / "reading.json")
 
 

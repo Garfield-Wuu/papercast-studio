@@ -113,6 +113,20 @@ def _check_llm_key(role: str, env_name: str, explicit: str | None) -> Dependency
 
 
 def _check_minimax_key() -> DependencyStatus:
-    if os.environ.get("MINIMAX_API_KEY"):
-        return DependencyStatus(name="minimax", ok=True, detail="MINIMAX_API_KEY set")
-    return DependencyStatus(name="minimax", ok=False, detail="MINIMAX_API_KEY not set")
+    if not os.environ.get("MINIMAX_API_KEY"):
+        return DependencyStatus(name="minimax", ok=False, detail="MINIMAX_API_KEY not set")
+    if os.environ.get("MINIMAX_GROUP_ID"):
+        return DependencyStatus(
+            name="minimax", ok=True,
+            detail="MINIMAX_API_KEY + MINIMAX_GROUP_ID set",
+        )
+    # Old-style tokens (issued before mid-2025) embed group_id in the
+    # JWT, so MiniMax accepts them without a query-string GroupId.
+    # Newly-issued tokens need MINIMAX_GROUP_ID or every files/upload
+    # call returns status 1004 ("token not match group"). We can't tell
+    # which kind the user has without a probe call, so we surface a
+    # soft warning rather than failing the dependency outright.
+    return DependencyStatus(
+        name="minimax", ok=True,
+        detail="MINIMAX_API_KEY set; MINIMAX_GROUP_ID empty (newer tokens need it)",
+    )

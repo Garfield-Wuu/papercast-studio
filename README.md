@@ -4,7 +4,7 @@
 
 # papercast-studio
 
-**Turn a PDF paper into an 8-minute lab-share video — end-to-end.**
+**Turn a PDF paper into an 8-minute presentation video — end-to-end.**
 
 PDF → reading → slide plan → script → review → TTS → video. <br/>
 A 12-stage pipeline with web UI, voice cloning, and human-in-the-loop review.
@@ -12,11 +12,11 @@ A 12-stage pipeline with web UI, voice cloning, and human-in-the-loop review.
 [![release](https://img.shields.io/github/v/release/Garfield-Wuu/papercast-studio?style=flat-square&color=blueviolet)](https://github.com/Garfield-Wuu/papercast-studio/releases)
 [![python](https://img.shields.io/badge/python-3.11+-blue?style=flat-square&logo=python&logoColor=white)](https://www.python.org)
 [![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![tests](https://img.shields.io/badge/tests-95%20passing-success?style=flat-square)](#testing)
+[![CI](https://img.shields.io/github/actions/workflow/status/Garfield-Wuu/papercast-studio/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/Garfield-Wuu/papercast-studio/actions)
 [![platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey?style=flat-square)](#install)
 [![中文](https://img.shields.io/badge/lang-中文-red?style=flat-square)](README.zh-CN.md)
 
-[**Quickstart**](#-quickstart) · [**Features**](#-features) · [**Web UI**](#-web-ui) · [**Architecture**](#-architecture) · [**Docs**](docs/) · [中文文档](README.zh-CN.md)
+[**Quickstart**](#-quickstart) · [**Features**](#-features) · [**Web UI**](#-web-ui) · [**Architecture**](#-architecture) · [**CLI**](#-cli) · [中文文档](README.zh-CN.md)
 
 </div>
 
@@ -53,7 +53,7 @@ A 12-stage pipeline with web UI, voice cloning, and human-in-the-loop review.
 git clone https://github.com/Garfield-Wuu/papercast-studio.git
 cd papercast-studio
 
-# Python env (use a separate env name to avoid conflicting with the v1 repo)
+# Python env
 conda create -n papercast-studio python=3.11 -y
 conda activate papercast-studio
 pip install -e ".[dev,llm]"
@@ -66,8 +66,8 @@ cp config/secrets.example.env  config/secrets.env   # fill MINIMAX_API_KEY etc.
 papercast template-parse
 
 # Verify
-pytest                  # 95 passing
-papercast --help        # CLI reference
+pytest -q              # full test suite
+papercast --help       # CLI reference
 ```
 
 Then double-click **`dev.bat`** (Windows) — it opens two PowerShell windows running the FastAPI backend (`:8765`) and Vite dev server (`:5173`). Or call `dev.ps1` directly with `-BackendOnly` / `-FrontendOnly`.
@@ -233,37 +233,23 @@ ls output/                                          # → 2026-05-29_a1b2c3d4e5.
 
 ---
 
-## 🚀 Hermes deployment
+## 🚀 Automation
 
-papercast-studio runs as a long-lived service on Hermes (cron + Discord trigger).
+Run as a long-lived service — schedule the same CLI commands you'd run by hand.
 
 <details>
-<summary><b>cron entries</b></summary>
+<summary><b>cron / systemd timer example</b></summary>
 
 ```cron
 # Daily inbox scan
-7 9 * * *    cd /opt/papercast-studio && uv run papercast scan
+7 9 * * *    cd /opt/papercast-studio && papercast scan
 
 # Advance pending tasks every 5 min (TTS poll, video composition)
-*/5 * * * *  cd /opt/papercast-studio && uv run papercast tick
+*/5 * * * *  cd /opt/papercast-studio && papercast tick
 
-# Hourly retry pass
-13 * * * *   cd /opt/papercast-studio && uv run papercast retry-failed
+# Hourly retry pass for failed tasks
+13 * * * *   cd /opt/papercast-studio && papercast retry-failed
 ```
-
-</details>
-
-<details>
-<summary><b>Discord trigger flow</b></summary>
-
-| User says (Discord) | Hermes runs |
-|---|---|
-| "Uploaded a new paper, scan" | `papercast scan` then `papercast tick` |
-| "Where's a1b2c3 at?" | `papercast status a1b2c3` |
-| "Approve a1b2c3, date 2026-05-29" | `papercast approve a1b2c3 --report-date 2026-05-29 --reviewer <user>` |
-| "Retry failures" | `papercast retry-failed` |
-
-The Discord listener lives in Hermes, not in this repo.
 
 </details>
 
@@ -272,25 +258,11 @@ The Discord listener lives in Hermes, not in this repo.
 ## 🧪 Testing
 
 ```bash
-pytest                                      # 95 passing, no external deps required
-pytest --cov=papercast --cov-report=term    # coverage
-pytest tests/test_author_render.py -v       # single file
+pytest -q                                   # full suite, no external deps
+pytest --cov=papercast --cov-report=term    # with coverage
 ```
 
-| Module | Tests | Coverage |
-|---|---:|---:|
-| author/template | 15 | 96% |
-| author/render | 16 | — |
-| reader/pdf | 7 | 97% |
-| reader/figures | 10 | 88% |
-| reader/reading | 9 | 91% |
-| voicer/adapter | 9 | 91% |
-| composer | 11 | 88% |
-| notifier/review_pack | 8 | 96% |
-| core/state, db, scanner | 10 | 95% avg |
-| **Total** | **95** | **79%** |
-
-> The pipeline runner files (`reader/voicer/composer/pipeline.py`) sit at 0% — they're end-to-end glue, validated by real `papercast tick` runs, not by unit tests.
+The `tests/` folder covers the state machine, PDF parsing, figure extraction, slide assembly, voicer adapter, composer, and the FastAPI server. Pipeline runner glue (`*/pipeline.py`) is validated by real `papercast tick` runs rather than unit tests.
 
 ---
 
@@ -310,7 +282,7 @@ bootstrap/                       # Windows portable build scripts
 docs/                            # design + API + plan docs
 templates/                       # PPT master + parsed schema
 prompts/                         # LLM prompt templates
-tests/                           # 95 pytest cases
+tests/                           # pytest test suite
 ```
 
 ---
@@ -321,6 +293,13 @@ tests/                           # 95 pytest cases
 <summary><b><code>MINIMAX_API_KEY not set</code></b></summary>
 
 Env var didn't load. Either fill it in the Settings page (writes to `secrets.env`), or `export` it in your shell.
+
+</details>
+
+<details>
+<summary><b>MiniMax error: <code>token not match group</code> (status 1004)</b></summary>
+
+MiniMax tokens issued after mid-2025 no longer carry a group claim — every request must include `GroupId` as a query param. Copy your **Group ID** from the MiniMax console and paste it into Settings → TTS → MiniMax Group ID (or set `MINIMAX_GROUP_ID` in `config/secrets.env`). Older tokens with embedded group claims keep working without it.
 
 </details>
 
@@ -369,7 +348,6 @@ MIT. See [`LICENSE`](LICENSE).
 
 <div align="center">
 
-Built with ❤️ for [literature-video-agent](https://github.com/Garfield-Wuu/literature-video-agent).
 
 [Report bug](https://github.com/Garfield-Wuu/papercast-studio/issues) · [Request feature](https://github.com/Garfield-Wuu/papercast-studio/issues) · [中文文档](README.zh-CN.md)
 

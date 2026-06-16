@@ -291,3 +291,34 @@ def test_script_done_fails_clearly_when_plan_missing(tmp_path: Path) -> None:
     _setup_paper_dirs(cfg, "p9")
     with pytest.raises(FileNotFoundError, match="slides_plan.json"):
         cli_main._script_done_runner(cfg, "p9")
+
+
+# ---------------------------------------------------------------------------
+# Template vars from start_meta.json
+# ---------------------------------------------------------------------------
+
+
+def test_load_template_vars_from_start_meta(tmp_path: Path) -> None:
+    """Verify slides_done / script_done pull REPORTER/MAJOR/REPORT_DATE
+    from start_meta.json so the Cover is filled on first assembly."""
+    cfg = _make_config(tmp_path)
+    paper_id = "p_cover"
+    review = Path(cfg.paths.review) / paper_id
+    review.mkdir(parents=True)
+    (review / "start_meta.json").write_text(json.dumps({
+        "report_date": "2026-06-15",
+        "reviewer": "Alice",
+        "major": "Computer Vision",
+    }), encoding="utf-8")
+
+    vars_ = cli_main._load_template_vars_from_start_meta(cfg, paper_id)
+    assert vars_ == {
+        "REPORTER": "Alice",
+        "MAJOR": "Computer Vision",
+        "REPORT_DATE": "2026-06-15",
+    }
+
+    # Missing file → empty dict
+    empty = cli_main._load_template_vars_from_start_meta(cfg, "no_such_paper")
+    assert empty == {}
+

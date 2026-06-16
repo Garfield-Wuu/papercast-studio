@@ -380,6 +380,37 @@ def test_openai_missing_choices_raises() -> None:
         p.complete("ping")
 
 
+def test_openai_reasoning_only_response_surfaces_actionable_error() -> None:
+    """Thinking models (deepseek-reasoner, qwen3-think, glm-4.6-thinking)
+    sometimes route the entire answer into reasoning_content and leave
+    content empty. The provider must surface this with a hint to switch
+    models, NOT a downstream "no JSON object" three layers up."""
+    http = _FakeHTTPClient()
+    http.queue(_FakeHTTPResponse(200, {
+        "choices": [{"message": {
+            "role": "assistant",
+            "content": "",
+            "reasoning_content": "Let me think about the schema… (long trace)",
+        }}],
+    }))
+    p = OpenAIProvider(_openai_spec(backoff_sec=(0.0,)), http_client=http)
+    with pytest.raises(LLMError, match="reasoning_content"):
+        p.complete("ping")
+
+
+def test_openai_empty_string_content_falls_through_to_no_text_error() -> None:
+    """Empty content with no reasoning_content should produce the existing
+    "no text content" error — not silently return an empty string that
+    blows up the JSON extractor downstream."""
+    http = _FakeHTTPClient()
+    http.queue(_FakeHTTPResponse(200, {
+        "choices": [{"message": {"role": "assistant", "content": "   "}}],
+    }))
+    p = OpenAIProvider(_openai_spec(backoff_sec=(0.0,)), http_client=http)
+    with pytest.raises(LLMError, match="no text content"):
+        p.complete("ping")
+
+
 def test_openai_missing_api_key_for_remote_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     spec = LLMSpec(
@@ -487,8 +518,17 @@ def test_spec_returns_none_when_neither_set(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_presets_contain_required_providers() -> None:
-    for name in ("anthropic", "openai", "deepseek", "qwen", "ollama", "custom_openai", "custom_anthropic"):
+    for name in ("anthropic", "openai", "deepseek", "qwen", "ollama", "minimax", "custom_openai", "custom_anthropic"):
         assert name in PRESETS, f"preset {name!r} missing"
+
+
+def test_minimax_preset_reuses_tts_key_env() -> None:
+    """MiniMax LLM endpoint should default to MINIMAX_API_KEY so users
+    don't have to enter the same token twice (TTS + LLM)."""
+    p = PRESETS["minimax"]
+    assert p["api_key_env"] == "MINIMAX_API_KEY"
+    assert p["provider"] == "openai_compat"
+    assert p["base_url"] and p["base_url"].endswith("/v1")
 
 
 def test_each_preset_has_required_fields() -> None:

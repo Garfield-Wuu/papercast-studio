@@ -320,6 +320,10 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     Duplicated here on purpose — both modules have a small parser and
     keeping them independent means a change to one prompt format won't
     silently break the other.
+
+    On failure, attach a short snippet of the raw response so operators
+    can tell at a glance whether the model refused, returned an error
+    blob, or sent reasoning-only output.
     """
     if not raw or not raw.strip():
         raise ValueError("empty LLM response")
@@ -328,7 +332,9 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
         return _safe_json_loads(m.group(1))
     start = raw.find("{")
     if start < 0:
-        raise ValueError("no JSON object in LLM response")
+        raise ValueError(
+            f"no JSON object in LLM response; got: {_snippet(raw)!r}"
+        )
     depth = 0
     for i in range(start, len(raw)):
         c = raw[i]
@@ -338,7 +344,21 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
             depth -= 1
             if depth == 0:
                 return _safe_json_loads(raw[start:i + 1])
-    raise ValueError("unterminated JSON object in LLM response")
+    raise ValueError(
+        f"unterminated JSON object in LLM response; got: {_snippet(raw)!r}"
+    )
+
+
+# Length of the response snippet appended to JSON-extraction errors.
+_RAW_SNIPPET_CHARS = 240
+
+
+def _snippet(raw: str) -> str:
+    """Single-line preview of the raw response, capped at _RAW_SNIPPET_CHARS."""
+    flat = " ".join(raw.split())
+    if len(flat) <= _RAW_SNIPPET_CHARS:
+        return flat
+    return flat[:_RAW_SNIPPET_CHARS] + "…"
 
 
 def _safe_json_loads(text: str) -> dict[str, Any]:

@@ -203,9 +203,19 @@ def _format_pages(parsed: ParsedDocument) -> str:
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
+# Length of the response snippet appended to JSON-extraction errors. Long
+# enough for an operator to recognise refusal text or a stray prefix; short
+# enough to avoid dumping a full prompt-injection-sized response into logs.
+_RAW_SNIPPET_CHARS = 240
+
 
 def _extract_json_object(raw: str) -> dict:
-    """Try fenced ```json``` block first, then a bare {...} object."""
+    """Try fenced ```json``` block first, then a bare {...} object.
+
+    On failure, attach a short snippet of the raw response to the
+    ValueError so operators can tell at a glance whether the model
+    refused, returned an error blob, or sent reasoning-only output.
+    """
     if not raw or not raw.strip():
         raise ValueError("empty LLM response")
     m = _FENCE_RE.search(raw)
@@ -214,7 +224,9 @@ def _extract_json_object(raw: str) -> dict:
     # Fall back: locate the first { and take the matching balanced object.
     start = raw.find("{")
     if start < 0:
-        raise ValueError("no JSON object in LLM response")
+        raise ValueError(
+            f"no JSON object in LLM response; got: {_snippet(raw)!r}"
+        )
     depth = 0
     for i in range(start, len(raw)):
         c = raw[i]
@@ -224,7 +236,17 @@ def _extract_json_object(raw: str) -> dict:
             depth -= 1
             if depth == 0:
                 return _safe_json_loads(raw[start:i + 1])
-    raise ValueError("unterminated JSON object in LLM response")
+    raise ValueError(
+        f"unterminated JSON object in LLM response; got: {_snippet(raw)!r}"
+    )
+
+
+def _snippet(raw: str) -> str:
+    """Single-line preview of the raw response, capped at _RAW_SNIPPET_CHARS."""
+    flat = " ".join(raw.split())  # collapse newlines / runs of whitespace
+    if len(flat) <= _RAW_SNIPPET_CHARS:
+        return flat
+    return flat[:_RAW_SNIPPET_CHARS] + "…"
 
 
 def _safe_json_loads(text: str) -> dict:

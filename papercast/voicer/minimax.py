@@ -7,6 +7,14 @@ locally without Hermes (developer setup, smoke tests).
 
 Authentication: reads MINIMAX_API_KEY from the environment. Never
 hard-code or persist the key.
+
+Tokens issued before mid-2025 embed the user's group_id inside the JWT,
+so the server can recover it from the bearer alone. Tokens issued
+after that change carry no group claim — every request must include a
+`GroupId` query parameter or MiniMax responds with status 1004 ("token
+not match group"). We therefore optionally read MINIMAX_GROUP_ID from
+the environment and attach it to every call. Old tokens still work
+without the env var; new tokens won't.
 """
 
 from __future__ import annotations
@@ -28,6 +36,7 @@ class MiniMaxAPIClient:
         api_key: str | None = None,
         base_url: str = _BASE_URL,
         timeout_sec: float = 60.0,
+        group_id: str | None = None,
     ) -> None:
         key = api_key or os.environ.get("MINIMAX_API_KEY")
         if not key:
@@ -38,10 +47,28 @@ class MiniMaxAPIClient:
         self._key = key
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout_sec
+        # Falls back to MINIMAX_GROUP_ID env var — required for tokens
+        # issued after mid-2025 that no longer carry a group claim.
+        # Empty string is treated as unset so a stray `MINIMAX_GROUP_ID=`
+        # line in secrets.env doesn't send `?GroupId=`.
+        self._group_id = (group_id or os.environ.get("MINIMAX_GROUP_ID") or "").strip() or None
 
     @classmethod
     def from_env(cls) -> MiniMaxAPIClient:
         return cls()
+
+    def _with_group(self, params: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Merge GroupId into the request's query string when configured.
+
+        Returns the params dict unchanged (possibly None) when no
+        group_id is set, so old-style tokens with embedded group claims
+        keep working untouched.
+        """
+        if not self._group_id:
+            return params
+        merged = dict(params or {})
+        merged.setdefault("GroupId", self._group_id)
+        return merged
 
     def submit(
         self, text: str, voice_id: str, speed: float = 1.0,
@@ -106,7 +133,7 @@ class MiniMaxAPIClient:
             with httpx.Client(timeout=self._timeout) as client:
                 r = client.get(
                     f"{self._base_url}/v1/files/retrieve_content",
-                    params={"file_id": file_id},
+                    params=self._with_group({"file_id": file_id}),
                     headers=self._auth_headers(),
                 )
                 r.raise_for_status()
@@ -121,11 +148,12 @@ class MiniMaxAPIClient:
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._key}"}
 
-    def _post(self, path: str, *, json: dict) -> dict:
+    def _post(self, path: str, *, json: dict, params: dict | None = None) -> dict:
         with httpx.Client(timeout=self._timeout) as client:
             r = client.post(
                 f"{self._base_url}{path}",
                 json=json,
+                params=self._with_group(params),
                 headers={**self._auth_headers(), "Content-Type": "application/json"},
             )
             r.raise_for_status()
@@ -135,7 +163,7 @@ class MiniMaxAPIClient:
         with httpx.Client(timeout=self._timeout) as client:
             r = client.get(
                 f"{self._base_url}{path}",
-                params=params,
+                params=self._with_group(params),
                 headers=self._auth_headers(),
             )
             r.raise_for_status()
@@ -175,6 +203,7 @@ class MiniMaxAPIClient:
             r = client.post(
                 f"{self._base_url}/v1/files/upload",
                 headers=self._auth_headers(),
+                params=self._with_group(None),
                 data={"purpose": purpose},
                 files={"file": (filename, audio, content_type)},
             )
@@ -264,6 +293,7 @@ class MiniMaxAPIClient:
             r = client.post(
                 f"{self._base_url}/v1/t2a_v2",
                 json=body,
+                params=self._with_group(None),
                 headers={**self._auth_headers(), "Content-Type": "application/json"},
             )
             r.raise_for_status()

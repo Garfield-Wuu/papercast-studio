@@ -16,6 +16,14 @@ interface Props {
   paperId: string;
   staleHint?: string | null;
   defaultVoice?: string;
+  /**
+   * Set after the user clicked "刷新页面（已手改）". When true the
+   * server has written manual_override.json so the approval step will
+   * skip _rebake_cover_date and publish the disk PPT as-is. We surface
+   * this to the user so the approve action doesn't feel like a
+   * surprise.
+   */
+  manualOverride?: boolean;
   saving: boolean;
   onSubmit: (args: {
     voice?: string;
@@ -51,6 +59,7 @@ export function ApproveDialog({
   onOpenChange,
   staleHint,
   defaultVoice,
+  manualOverride = false,
   saving,
   onSubmit,
 }: Props) {
@@ -120,6 +129,18 @@ export function ApproveDialog({
         description="确认后流水线进入 TTS 阶段。汇报日期 / 汇报人 / 专业来自启动时的填写，无需在此重复。"
       >
         <DialogBody className="space-y-4">
+          {manualOverride && (
+            <div
+              className="rounded border border-success/40 bg-success/10 p-3 text-xs text-success"
+              role="status"
+            >
+              已检测到手动修改的 PPT / 讲稿。审批通过后将直接使用磁盘上的版本生成视频，不会再按模板重拼。
+              <br />
+              <span className="text-fg-muted">
+                Cover 页的日期 / 汇报人 / 专业占位符不会再被自动替换 —— 请确认你的手改 PPT 已填好。
+              </span>
+            </div>
+          )}
           {staleHint && (
             <div className="rounded border border-warning/40 bg-warning/10 p-3 text-xs text-warning" role="alert">
               {staleHint}

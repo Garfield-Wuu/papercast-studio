@@ -430,6 +430,44 @@ export function SettingsPage() {
             />
           </div>
         </Field>
+        {/* MiniMax Group ID — required for tokens issued after mid-2025.
+            Older tokens carry group_id inside the JWT so this can stay
+            empty; newer tokens have no group claim and the upload /
+            files / T2A endpoints reject them with status 1004
+            ("token not match group") unless GroupId is supplied as a
+            query param. The control panel surfaces this so packaged-
+            installer users can fix the error themselves. */}
+        <Field
+          label="MiniMax Group ID"
+          hint={
+            cfg.secrets_fingerprint["MINIMAX_GROUP_ID"] &&
+            cfg.secrets_fingerprint["MINIMAX_GROUP_ID"] !== "unset"
+              ? `当前指纹：${cfg.secrets_fingerprint["MINIMAX_GROUP_ID"]}`
+              : "若克隆/合成报 token not match group，请在 MiniMax 控制台复制 GroupId 填入"
+          }
+        >
+          <Input
+            type="password"
+            value={draft.secrets["MINIMAX_GROUP_ID"]?.value ?? ""}
+            onChange={(e) =>
+              setDraft({
+                ...draft,
+                secrets: {
+                  ...draft.secrets,
+                  MINIMAX_GROUP_ID: { value: e.target.value },
+                },
+              })
+            }
+            placeholder={
+              cfg.secrets_fingerprint["MINIMAX_GROUP_ID"] &&
+              cfg.secrets_fingerprint["MINIMAX_GROUP_ID"] !== "unset"
+                ? "（已设置；输入新值会覆盖）"
+                : "留空则使用 token 内嵌 group；2025 年后新签发的 key 必填"
+            }
+            autoComplete="off"
+            className="font-mono text-xs"
+          />
+        </Field>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field
             label="音色"

@@ -209,6 +209,46 @@ def _read_done_runner(cfg, paper_id):
     pipeline.run_reading(cfg, paper_id, reader=provider)
 
 
+def _load_template_vars_from_start_meta(cfg, paper_id):
+    """Best-effort load of REPORTER/MAJOR/REPORT_DATE from the WebUI's
+    StartPaperDialog.
+
+    Lives in cli/main.py rather than alongside the FastAPI helper because
+    the slides_done / script_done runners are reused by both the CLI tick
+    loop and the JobOrchestrator — pulling start_meta.json here means the
+    Cover slide gets baked correctly the first time around, instead of
+    having to wait until approval to re-bake.
+
+    Reads the file directly (bypassing papercast.server.review_service)
+    so the CLI works in environments that don't have FastAPI installed.
+
+    Returns {} when the file is absent or empty (offline/CLI case).
+    """
+    import json
+    from pathlib import Path
+
+    path = Path(cfg.paths.review) / paper_id / "start_meta.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+
+    out: dict[str, str] = {}
+    if isinstance(data.get("reviewer"), str) and data["reviewer"].strip():
+        out["REPORTER"] = data["reviewer"].strip()
+    if isinstance(data.get("major"), str) and data["major"].strip():
+        out["MAJOR"] = data["major"].strip()
+    # Honor a pre-committed report_date too, so the upload-time choice
+    # also flows through. The reviewer can still override at approve.
+    if isinstance(data.get("report_date"), str) and data["report_date"].strip():
+        out["REPORT_DATE"] = data["report_date"].strip()
+    return out
+
+
 def _slides_done_runner(cfg, paper_id):
     """read_done → slides_done.
 
@@ -233,9 +273,13 @@ def _slides_done_runner(cfg, paper_id):
     plan = load_slides_plan(plan_path)
     page_notes = parse_script_md(work / "script.md")  # empty if missing
     out = work / f"{paper_id}.pptx"
+    # Pull REPORTER/MAJOR from start_meta.json if the user filled them in
+    # at upload time (webui StartPaperDialog → POST /papers/{pid}/start).
+    template_vars = _load_template_vars_from_start_meta(cfg, paper_id)
     assemble_pptx(
         plan, Path(cfg.paths.template), work / "figures", out,
         page_notes=page_notes or None,
+        template_vars=template_vars or None,
     )
 
 
@@ -340,9 +384,11 @@ def _script_done_runner(cfg, paper_id):
     plan = load_slides_plan(plan_path)
     page_notes = parse_script_md(script_path)
     out = work / f"{paper_id}.pptx"
+    template_vars = _load_template_vars_from_start_meta(cfg, paper_id)
     assemble_pptx(
         plan, Path(cfg.paths.template), work / "figures", out,
         page_notes=page_notes or None,
+        template_vars=template_vars or None,
     )
 
 

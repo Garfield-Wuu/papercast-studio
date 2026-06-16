@@ -78,6 +78,17 @@ export const LLM_PRESETS: LLMPreset[] = [
     model_examples: ["glm-4.6", "glm-4-plus", "glm-4-air"],
   },
   {
+    key: "minimax",
+    label: "MiniMax",
+    provider: "openai_compat",
+    // OpenAI-compatible chat endpoint; reuses MINIMAX_API_KEY so users
+    // don't enter the same token twice (TTS + LLM). GroupId is only
+    // required for files/upload + T2A — chat completions don't need it.
+    base_url: "https://api.minimax.io/v1",
+    api_key_env: "MINIMAX_API_KEY",
+    model_examples: ["MiniMax-M2", "abab6.5s-chat", "abab6.5-chat"],
+  },
+  {
     key: "ollama",
     label: "Ollama (本地)",
     provider: "openai_compat",

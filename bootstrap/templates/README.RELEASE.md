@@ -117,13 +117,23 @@ papercast-studio\
 
 跑一次 `install.ps1`。如果还不行，手动检查 `runtime\libreoffice\program\soffice.exe` 是否存在。
 
-### Q4：视频出来但音频是默认 voice
+### Q4：克隆/合成报 `MiniMax error: token not match group` (status=1004)
+
+这是 2025 年中之后新签发的 MiniMax token 不再把 group 编进 JWT 引起的。修复办法：
+
+1. 登录 [MiniMax 控制台](https://platform.minimaxi.com/) → 账户管理 → 复制 **Group ID**
+2. 进入 WebUI 的「**配置**」页 → **TTS 默认设置** → 在「**MiniMax Group ID**」里粘贴
+3. 保存后重试克隆
+
+老 token（key 长得像 `eyJ...` 一长串 JWT）没填 GroupId 也能用；新 token 必须填。
+
+### Q5：视频出来但音频是默认 voice
 
 去「**语音管理**」页：
 - 系统音色右边点 ⭐ 加进收藏（或者用克隆向导上传自己的样本）
 - 回到「**配置**」页，**音色**下拉里选刚收藏的项 → 保存
 
-### Q5：怎么升级到新版本
+### Q6：怎么升级到新版本
 
 下新版 zip 解压到**新目录**，把老目录的 `config\` `inbox\` `archive\` `work\` `review\` `output\` `logs\` 整个拷过去（保留任务历史）。
 

@@ -150,6 +150,20 @@ PRESETS: dict[str, dict[str, Any]] = {
         "api_key_env": "ZHIPU_API_KEY",
         "model_examples": ["glm-4.6", "glm-4-plus", "glm-4-air"],
     },
+    "minimax": {
+        "label": "MiniMax",
+        "provider": "openai_compat",
+        # MiniMax exposes an OpenAI-compatible chat-completions endpoint
+        # at api.minimax.io (international) and api.minimaxi.com (CN).
+        # The `.io` host serves both regions; we default to it because
+        # that's what their public docs use. Reuses MINIMAX_API_KEY so
+        # users don't have to enter the same token twice (TTS + LLM).
+        # Chat completions don't require GroupId — only the file/upload
+        # and T2A endpoints do.
+        "base_url": "https://api.minimax.io/v1",
+        "api_key_env": "MINIMAX_API_KEY",
+        "model_examples": ["MiniMax-M2", "abab6.5s-chat", "abab6.5-chat"],
+    },
     "ollama": {
         "label": "Ollama (本地)",
         "provider": "openai_compat",
@@ -455,7 +469,7 @@ def _extract_openai_text(payload: dict[str, Any]) -> str:
         raise LLMError(f"OpenAI response missing 'choices': {json.dumps(payload)[:200]}")
     msg = choices[0].get("message", {})
     content = msg.get("content")
-    if isinstance(content, str):
+    if isinstance(content, str) and content.strip():
         return content
     # Some OpenAI-compatible providers return content as a list of parts
     # (e.g. when tool_use is mixed in). Concatenate text parts only.
@@ -465,8 +479,26 @@ def _extract_openai_text(payload: dict[str, Any]) -> str:
             if isinstance(p, dict) and p.get("type") in (None, "text")
         ]
         joined = "".join(parts)
-        if joined:
+        if joined.strip():
             return joined
+    # Reasoning-only response: thinking models (deepseek-reasoner, qwen3-think,
+    # glm-4.6-thinking, …) sometimes route the entire answer into
+    # `reasoning_content` and leave `content` empty. Downstream parsers expect
+    # JSON in `content`, so this would otherwise surface as a confusing
+    # "no JSON object in LLM response" three layers up. Surface it here with
+    # an actionable hint instead.
+    reasoning = msg.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning.strip():
+        raise LLMError(
+            "LLM returned reasoning_content but empty content — this model "
+            "is in 'thinking' mode and is not putting the JSON answer in "
+            "the response body. Switch to a non-reasoning model "
+            "(claude-sonnet-4-6, gpt-5, qwen-max, deepseek-chat, glm-4.6) "
+            "or disable thinking for this provider. "
+            f"reasoning preview: {reasoning[:160]!r}"
+        )
+    # Empty content with no reasoning either — log enough of the message
+    # for the operator to diagnose (refusal, wrong model id, billing block).
     raise LLMError(f"OpenAI response had no text content: {json.dumps(msg)[:200]}")
 
 

@@ -85,6 +85,11 @@ def _fingerprint_secrets(cfg: Config) -> dict[str, str]:
         cfg.llm.reader.api_key_env,
         cfg.llm.author.api_key_env,
         "MINIMAX_API_KEY",
+        # Optional: only required for tokens issued after mid-2025 that
+        # no longer carry a group claim. Showing it here lets users see
+        # whether they've filled it in even when MiniMax accepts the key
+        # without it (old-style tokens).
+        "MINIMAX_GROUP_ID",
     ]
     out: dict[str, str] = {}
     for env_name in interesting:

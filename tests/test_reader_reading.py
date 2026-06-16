@@ -195,3 +195,30 @@ def test_real_reading_json_is_valid_if_present() -> None:
     assert isinstance(payload["fact_cards"], list)
     for card in payload["fact_cards"]:
         assert {"claim", "evidence", "page"} <= set(card)
+
+
+# ---------------------------------------------------------------------------
+# Diagnostic-quality errors when the LLM doesn't return JSON
+# ---------------------------------------------------------------------------
+
+
+def test_parse_response_includes_snippet_on_no_json() -> None:
+    """When the LLM refuses or returns prose, the ValueError must carry a
+    preview of the response so operators don't have to re-run the stage
+    just to see what the model said."""
+    refusal = "很抱歉，我无法处理该文档。请检查输入。"
+    with pytest.raises(ValueError, match="no JSON object") as excinfo:
+        parse_reading_response(refusal)
+    assert "很抱歉" in str(excinfo.value)
+
+
+def test_parse_response_truncates_long_snippet() -> None:
+    """Long responses (e.g. a full reasoning trace) must be truncated so
+    the error message stays readable in logs."""
+    junk = "x" * 5000
+    with pytest.raises(ValueError) as excinfo:
+        parse_reading_response(junk)
+    msg = str(excinfo.value)
+    # 240-char snippet + ellipsis; way under the original 5000.
+    assert len(msg) < 600
+    assert "…" in msg or "..." in msg
